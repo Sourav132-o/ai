@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+import requests
+import subprocess
+import sys
+import re
+import os
+
+# ==============================================
+# CONFIGURATION
+# ==============================================
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "llama3" 
+
+# সব টুলস একসাথে অ্যাড করা হয়েছে
+ALLOWED_TOOLS = [
+    "nmap", "gobuster", "sqlmap", "nikto", "dirsearch",
+    "whatweb", "enum4linux", "hydra", "ffuf", "msfvenom",
+    "sherlock", "exiftool", "whois", "theharvester",
+    "holehe", "phoneinfoga", "dnsrecon", "arp-scan", 
+    "wpscan", "airodump-ng", "aireplay-ng"
+]
+
+# রিপোর্ট ফোল্ডার তৈরি
+REPORT_DIR = "pentest_reports"
+if not os.path.exists(REPORT_DIR):
+    os.makedirs(REPORT_DIR)
+
+# ==============================================
+# DANGEROUS PATTERNS
+# ==============================================
+DANGEROUS_PATTERNS = [
+    r'\brm\s+-rf\b', r'\brm\s+-r\b.*\b/\b', r'\brm\s+-rf\s+\.\b',
+    r'\brm\s+-rf\s+\~\b', r'\brm\s+-rf\s+/\b',
+    r'\bdd\s+if=', r'\bdd\s+of=/dev/', r'\bmkfs\b', r'\bwipefs\b',
+    r'\bchmod\s+(-R\s+)?777\b', r'\bchmod\s+(-R\s+)?000\b',
+    r'\bchown\s+(-R\s+)?root\b', r'\bchown\s+(-R\s+)?0:0\b',
+    r'\bwget\s+.*\bhttps?://', r'\bcurl\s+.*\bhttps?://',
+    r'\b\|\s*(bash|sh|zsh|python|perl|ruby)\b',
+    r';', r'&&', r'\|\|', r'\|', r'\$\(', r'`', r'\$\{',
+    r':\(\)\s*{\s*:\|\:&}\s*;:?', 
+    r'\bnc\s+.*-e\b', r'\bnetcat\s+.*-e\b', r'\bsshd?\b.*-R\b',
+    r'\bmknod\b.*\bp\b',
+    r'\becho\s+.*\b>>.*\bcrontab\b', r'\bcrontab\s+-e\b',
+    r'\b\.bashrc\b|\b\.bash_profile\b|\b\.profile\b',
+    r'\bsystemctl\s+(stop|disable|mask)\b', r'\bufw\s+disable\b',
+    r'\biptables\s+-F\b', r'\bchattr\s+\+[i|a]\b',
+    r'\bpython\s+-c.*(os\.system|subprocess\.call|exec)\b',
+    r'\bperl\s+-e.*exec', r'\beval\b'
+]
+
+def query_ollama(prompt):
+    try:
+        response = requests.post(OLLAMA_URL, json={
+            'model': MODEL,
+            'prompt': prompt,
+            'stream': False
+        }, timeout=180)
+        response.raise_for_status()
+        return response.json()['response'].strip()
+    except Exception as e:
+        print(f"Ollama Error: {e}")
+        return None
+
+def check_security(cmd, user_input):
+    cmd_lower = cmd.lower()
+    input_lower = user_input.lower()
+    if 'sudo' in cmd_lower and 'extreme' not in input_lower:
+        return False, "sudo ব্যবহার করতে 'extreme' যোগ করো"
+    for pat in DANGEROUS_PATTERNS:
+        if re.search(pat, cmd_lower):
+            if 'force' not in input_lower:
+                return False, f"বিপজ্জনক প্যাটার্ন: {pat} → 'FORCE' যোগ করো"
+    parts = cmd.split()
+    if not parts: return False, "খালি কমান্ড"
+    tool = parts[0].lower()
+    if tool not in [t.lower() for t in ALLOWED_TOOLS] and 'extreme' not in input_lower:
+        return False, f"টুল অনুমোদিত নয়: {tool}"
+    return True, "OK"
+
+def run_command(cmd):
+    # টুলটি ইনস্টল আছে কি না চেক করা
+    tool = cmd.split()[0]
+    if subprocess.call(["which", tool], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
+        print(f"\n[!] সতর্কবার্তা: {tool} আপনার সিস্টেমে ইনস্টল নেই।")
+        print(f"ইনস্টল করতে লিখুন: sudo apt install {tool}")
+        return "Tool not found."
+
+    try:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}\nReturn code: {result.returncode}"
+        return output
+    except subprocess.TimeoutExpired:
+        return "কমান্ড ১০ মিনিট পর টাইমআউট হয়েছে"
+    except Exception as e:
+        return f"Execution failed: {e}"
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: ./pentest-ai.py \"task [extreme] [FORCE]\"")
+        sys.exit(1)
+
+    user_input = " ".join(sys.argv[1:])
+    print(f"Task: {user_input}\n")
+
+    prompt = f"""Generate ONE Kali Linux command for: {user_input}.
+Tools: {', '.join(ALLOWED_TOOLS)}.
+ONLY the command — no quotes, no explanation, no markdown."""
+
+    print("AI thinking...")
+    command = query_ollama(prompt)
+    if not command:
+        print("কমান্ড জেনারেট করতে পারেনি। Ollama চালু আছে কিনা চেক করো।")
+        return
+
+    command = command.replace('`', '').strip()
+    print(f"\nGenerated Command:\n{command}")
+
+    is_safe, reason = check_security(command, user_input)
+    if not is_safe:
+        print(f"REJECTED: {reason}")
+        return
+
+    confirm = input("\nRun this? (y/n): ").strip().lower()
+    if confirm != 'y':
+        print("Aborted.")
+        return
+
+    print("\nExecuting...\n")
+    output = run_command(command)
+    print(output)
+    
+    # রিপোর্ট ফাইলে সেভ করা
+    log_file = os.path.join(REPORT_DIR, "activity_log.txt")
+    with open(log_file, "a") as f:
+        f.write(f"Task: {user_input}\nCommand: {command}\nOutput:\n{output}\n{'-'*80}\n")
+    
+    print(f"\nকাজ শেষ! রিপোর্ট সেভ হয়েছে: {log_file}")
+
+if __name__ == "__main__":
+    main()
