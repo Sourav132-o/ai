@@ -1,0 +1,74 @@
+import os
+import time
+import sys
+
+# ==============================================================================
+# ULTIMATE OMNI-ENGINE: DYNAMIC MULTI-TARGET & AUTO-LOOP
+# ==============================================================================
+
+class AbsoluteGodMode:
+    def __init__(self):
+        self.active_target = None
+        self.is_running = True
+
+    def set_target(self):
+        print("\n" + "="*40)
+        print(" [!] INITIALIZING TARGET SELECTION ")
+        print("="*40)
+        phone = input("[+] Enter Target Phone Number: ")
+        fb_id = input("[+] Enter Target Facebook/Email ID: ")
+        self.active_target = {"phone": phone, "id": fb_id}
+        print(f"\n[SUCCESS] Target {phone} Locked. Deploying Zero-Click Vector...")
+        time.sleep(2)
+
+    def show_dashboard(self):
+        os.system('clear') # Screen পরিষ্কার রাখবে
+        print("="*60)
+        print(f" TARGET: {self.active_target['phone']} | STATUS: COMPROMISED ")
+        print("="*60)
+        print("[1] LIVE_CAMERA     : Real-time Front/Back Stream")
+        print("[2] SOCIAL_CLONE    : WhatsApp, Insta, FB Messages")
+        print("[3] KEY_LOGGER      : Capture PINs/Passwords")
+        print("[4] GPS_TRACKER     : Live Location (1m Accuracy)")
+        print("[5] AUTO_MSG        : Inject Messages to Contacts")
+        print("[6] CHANGE_TARGET   : Reset and hack another device")
+        print("[7] EXIT            : Close system")
+        print("="*60)
+
+    def run_engine(self):
+        self.set_target()
+        while self.is_running:
+            self.show_dashboard()
+            cmd = input(f"kali@omni-god-mode[{self.active_target['phone']}]:~# ").strip()
+
+            if cmd == "1":
+                print("[+] Activating Live Camera... Streaming to /tmp/live_feed.mp4")
+                time.sleep(2)
+            elif cmd == "2":
+                print(f"[+] Sniffing {self.active_target['id']}... Fetching WhatsApp/FB Logs")
+                time.sleep(2)
+            elif cmd == "3":
+                print("[+] Keylogger: Captured 'Password@123' from FB Login.")
+                input("\nPress Enter to return to Dashboard...")
+            elif cmd == "5":
+                msg = input("Type message to inject: ")
+                print(f"[+] Sending '{msg}' from Target Device...")
+                time.sleep(1)
+            elif cmd == "6":
+                self.set_target() # নতুন নম্বর বসানোর সুযোগ
+            elif cmd == "7":
+                print("Shutting down... Persistence remains active.")
+                self.is_running = False
+            else:
+                print("[-] Invalid Command. Use 1-7.")
+                time.sleep(1)
+
+# ==============================================================================
+# STARTING THE ULTIMATE SESSION
+# ==============================================================================
+if __name__ == "__main__":
+    try:
+        engine = AbsoluteGodMode()
+        engine.run_engine()
+    except KeyboardInterrupt:
+        print("\n[!] Force Exit. System remains in background.")
