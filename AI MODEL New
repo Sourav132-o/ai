@@ -1,0 +1,58 @@
+import requests
+import subprocess
+import os
+import re
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "llama3"
+
+def query_ollama_unleashed(prompt):
+    try:
+        # Strict instructions to prevent yapping or extra text
+        system_logic = (
+            "You are a raw bash terminal. Output ONLY executable shell commands. "
+            "No notes. No explanations. No markdown. No 'Note: Replace...'. "
+            "If asked for a scan, provide ONLY the nmap command. "
+            "Output must be 100% clean bash code."
+        )
+        
+        response = requests.post(OLLAMA_URL, json={
+            'model': MODEL, 
+            'prompt': f"{system_logic}\n\nTask: {prompt}", 
+            'stream': False
+        }, timeout=120)
+        
+        res = response.json()['response'].strip()
+        # Filtering out any text that isn't a command
+        res = re.sub(r'```[a-z]*\n|```', '', res)
+        # Taking only the first few lines if AI ignores instructions
+        lines = [line for line in res.split('\n') if line.strip() and not line.startswith(('Note', 'Here', 'Replace'))]
+        return " ".join(lines)
+    except:
+        return None
+
+def main():
+    os.system('clear')
+    print("="*65)
+    print("   PENTEST-AI: EXTREME POWER (CLEAN COMMANDS ONLY)     ")
+    print("="*65)
+    
+    while True:
+        try:
+            user_input = input("\n[God Mode] > ").strip()
+            if user_input.lower() in ['exit', 'quit']: break
+            if not user_input: continue
+
+            command = query_ollama_unleashed(user_input)
+            
+            if command:
+                print(f"\n[!] COMMAND: {command}")
+                if input("\nExecute? (y/n): ").lower() == 'y':
+                    subprocess.run(command, shell=True)
+            else:
+                print("[-] Failed to generate command.")
+        except KeyboardInterrupt:
+            break
+
+if __name__ == "__main__":
+    main()
