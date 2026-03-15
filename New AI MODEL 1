@@ -7,64 +7,60 @@ import re
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "llama3"
 
-def clean_command(text):
-    # AI যদি নোট বা ব্যাখ্যা দেয়, তবে শুধু প্রথম লাইন বা কমান্ডটা নেবে
-    text = re.sub(r'```[a-z]*\n|```', '', text) # Markdown সরানো
-    lines = text.strip().split('\n')
-    # প্রথম লাইনটি নেবে এবং শেষে কোনো ভুল চিহ্ন (যেমন - . ,) থাকলে মুছে ফেলবে
-    command = lines[0].strip().rstrip(' -.,')
-    return command
-
-def query_ollama(prompt):
+def query_ollama_for_tool(user_input):
     try:
+        # AI-কে শুধু টুল চেনার কাজ দেওয়া হয়েছে, কমান্ড বদলানোর নয়
         system_logic = (
-            "You are a raw Linux bash terminal. You ONLY output executable commands. "
-            "No explanations, no greetings, no extra characters. "
-            "Your output must be 100% clean shell code. "
-            "Strictly avoid adding any notes like 'Note: replace IP'."
+            "You are a search engine for Kali Linux tools. "
+            "Do not modify the user's command. Do not add symbols like '|' or '-'. "
+            "Output ONLY the exact command the user needs."
         )
-        
         response = requests.post(OLLAMA_URL, json={
             'model': MODEL, 
-            'prompt': f"{system_logic}\nTask: {prompt}", 
+            'prompt': f"{system_logic}\nTask: {user_input}", 
             'stream': False,
             'options': {'temperature': 0.0}
         }, timeout=120)
         
-        raw_res = response.json()['response']
-        return clean_command(raw_res)
-    except Exception as e:
-        print(f"[-] AI Connection Error: {e}")
+        res = response.json()['response'].strip()
+        # AI যদি কোনো ব্যাখ্যা বা নোট দেয় সেগুলো ছেঁটে ফেলার লজিক
+        res = re.sub(r'```[a-z]*\n|```', '', res)
+        clean_res = res.split('\n')[0].strip().rstrip(' -.,|')
+        return clean_res
+    except:
         return None
 
 def main():
     os.system('clear')
     print("="*65)
-    print("   PENTEST-AI: THE FINAL UNLEASHED VERSION (V3.0)      ")
-    print("   AUTO-CLEANING ACTIVE | ZERO-FAULT LOGIC | 600+ TOOLS ")
+    print("   PENTEST-AI: TRANSPARENT BRIDGE MODE (NO AI AUTO-EDIT)  ")
+    print("   STATUS: USER COMMANDS ARE ABSOLUTE | AI IS SEARCH ONLY ")
     print("="*65)
     
     while True:
         try:
+            # সরাসরি ইনপুট নেওয়া
             user_input = input("\n[God Mode] > ").strip()
             if user_input.lower() in ['exit', 'quit']: break
             if not user_input: continue
 
-            command = query_ollama(user_input)
+            # AI থেকে সাজেস্ট করা কমান্ড আনা
+            ai_suggestion = query_ollama_for_tool(user_input)
             
-            if command:
-                # কমান্ডটি যদি 'sudo' দিয়ে শুরু না হয় কিন্তু দরকার পড়ে, তবে নিজে থেকে যোগ করতে পারো
-                print(f"\n[!] GENERATED COMMAND: {command}")
+            # ডিসিশন লজিক: 
+            # যদি তুমি সরাসরি পূর্ণ কমান্ড লেখো (যেমন: sudo arp-scan -l), সেটাই রান হবে।
+            # যদি শুধু 'scan' লেখো, তবে AI যেটা সাজেস্ট করবে সেটা দেখাবে।
+            final_cmd = user_input if len(user_input.split()) > 1 else ai_suggestion
+
+            print(f"\n[!] READY TO RUN: {final_cmd}")
+            
+            confirm = input("Execute? (y/n): ").lower()
+            if confirm == 'y':
+                print("[*] Executing exactly as requested...\n")
+                # তোমার দেওয়া কমান্ড হুবহু রান হবে
+                subprocess.run(final_cmd, shell=True)
                 
-                confirm = input("Execute now? (y/n): ").lower()
-                if confirm == 'y':
-                    print("[*] Running...\n")
-                    # সরাসরি টার্মিনাল আউটপুট দেখানোর জন্য subprocess.run ব্যবহার
-                    subprocess.run(command, shell=True)
-            else:
-                print("[-] Could not generate a valid command.")
         except KeyboardInterrupt:
-            print("\n[!] Force closed.")
             break
 
 if __name__ == "__main__":
