@@ -1,0 +1,67 @@
+import requests
+import subprocess
+import os
+import re
+
+# --- CONFIGURATION ---
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "llama3"
+
+def query_ollama_for_tool(user_input):
+    try:
+        # Strictly English system logic to guide the AI
+        system_logic = (
+            "Act as a professional Kali Linux command generator. "
+            "Do not modify the user's intent. Do not add symbols like '|' or '-'. "
+            "Output ONLY the raw executable bash command. "
+            "If the user provides a full command, repeat it exactly."
+        )
+        
+        response = requests.post(OLLAMA_URL, json={
+            'model': MODEL, 
+            'prompt': f"{system_logic}\nTask: {user_input}", 
+            'stream': False,
+            'options': {'temperature': 0.0}
+        }, timeout=120)
+        
+        res = response.json()['response'].strip()
+        # Cleaning markdown and extra trailing symbols
+        res = re.sub(r'```[a-z]*\n|```', '', res)
+        clean_res = res.split('\n')[0].strip().rstrip(' -.,|')
+        return clean_res
+    except:
+        return None
+
+def main():
+    os.system('clear')
+    print("="*65)
+    print("   PENTEST-AI: PROFESSIONAL EDITION (ENGLISH ONLY)     ")
+    print("   STATUS: USER OVERRIDE ENABLED | AI AUTO-CLEAN ACTIVE ")
+    print("="*65)
+    
+    while True:
+        try:
+            # Taking user input
+            user_input = input("\n[God Mode] > ").strip()
+            if user_input.lower() in ['exit', 'quit']: break
+            if not user_input: continue
+
+            # Fetch suggestion from AI
+            ai_suggestion = query_ollama_for_tool(user_input)
+            
+            # Decision Logic: Use AI only for single keywords, else use raw input
+            final_cmd = user_input if len(user_input.split()) > 1 else ai_suggestion
+
+            print(f"\n[!] READY TO RUN: {final_cmd}")
+            
+            confirm = input("Execute? (y/n): ").lower()
+            if confirm == 'y':
+                print("[*] Executing system command...\n")
+                # Directly running the command via shell
+                subprocess.run(final_cmd, shell=True)
+                
+        except KeyboardInterrupt:
+            break
+
+if __name__ == "__main__":
+    main()
