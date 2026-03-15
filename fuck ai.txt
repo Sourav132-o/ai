@@ -1,0 +1,60 @@
+import requests
+import subprocess
+import os
+import re
+
+# --- CONFIGURATION ---
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "llama3"
+
+def query_ollama(user_input):
+    try:
+        system_logic = (
+            "You are a Kali Linux command engine. Output ONLY the raw command. "
+            "Do not add notes, symbols, or extra characters. "
+            "If the user input is a full command, return it exactly."
+        )
+        response = requests.post(OLLAMA_URL, json={
+            'model': MODEL, 
+            'prompt': f"{system_logic}\nTask: {user_input}", 
+            'stream': False,
+            'options': {'temperature': 0.0}
+        }, timeout=120)
+        
+        res = response.json()['response'].strip()
+        # Cleaning brackets and symbols using regex
+        res = re.sub(r'```[a-z]*\n|```', '', res)
+        # Final cleanup: This bracket logic removes anything after a pipe or extra symbol
+        clean_res = res.split('\n')[0].split('|')[0].strip().rstrip(' -.,')
+        return clean_res
+    except:
+        return None
+
+def main():
+    os.system('clear')
+    print("="*65)
+    print("   PENTEST-AI: FINAL SHIELD EDITION (NO MORE ERRORS)   ")
+    print("   STATUS: BRACKET FILTER ACTIVE | ENGLISH ONLY         ")
+    print("="*65)
+    
+    while True:
+        try:
+            user_input = input("\n[God Mode] > ").strip()
+            if user_input.lower() in ['exit', 'quit']: break
+            if not user_input: continue
+
+            # Force raw input if user types a multi-word command
+            if len(user_input.split()) > 1:
+                final_cmd = user_input
+            else:
+                final_cmd = query_ollama(user_input)
+
+            print(f"\n[!] COMMAND: {final_cmd}")
+            if input("Execute? (y/n): ").lower() == 'y':
+                print("[*] Running...\n")
+                subprocess.run(final_cmd, shell=True)
+        except KeyboardInterrupt:
+            break
+
+if __name__ == "__main__":
+    main()
