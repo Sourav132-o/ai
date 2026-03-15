@@ -1,0 +1,17 @@
+import requests
+
+# আপনার Canarytoken URL নিচের কোটেশনের ভেতরে বসান
+token_url = "আপনার_টোকেন_লিঙ্ক_এখানে"
+
+def create_trap_image():
+    try:
+        # লিঙ্ক থেকে ডাটা নিয়ে ইনোসেন্ট ইমেজে সেভ করা
+        response = requests.get(token_url, timeout=10)
+        with open("innocent_image.jpg", 'wb') as f:
+            f.write(response.content)
+        print("Success: innocent_image.jpg তৈরি হয়েছে।")
+    except Exception as e:
+        print(f"Error: {e}")
+
+if __name__ == "__main__":
+    create_trap_image()
