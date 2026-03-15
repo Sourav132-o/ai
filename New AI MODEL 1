@@ -1,0 +1,71 @@
+import requests
+import subprocess
+import os
+import re
+
+# --- CONFIGURATION ---
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "llama3"
+
+def clean_command(text):
+    # AI যদি নোট বা ব্যাখ্যা দেয়, তবে শুধু প্রথম লাইন বা কমান্ডটা নেবে
+    text = re.sub(r'```[a-z]*\n|```', '', text) # Markdown সরানো
+    lines = text.strip().split('\n')
+    # প্রথম লাইনটি নেবে এবং শেষে কোনো ভুল চিহ্ন (যেমন - . ,) থাকলে মুছে ফেলবে
+    command = lines[0].strip().rstrip(' -.,')
+    return command
+
+def query_ollama(prompt):
+    try:
+        system_logic = (
+            "You are a raw Linux bash terminal. You ONLY output executable commands. "
+            "No explanations, no greetings, no extra characters. "
+            "Your output must be 100% clean shell code. "
+            "Strictly avoid adding any notes like 'Note: replace IP'."
+        )
+        
+        response = requests.post(OLLAMA_URL, json={
+            'model': MODEL, 
+            'prompt': f"{system_logic}\nTask: {prompt}", 
+            'stream': False,
+            'options': {'temperature': 0.0}
+        }, timeout=120)
+        
+        raw_res = response.json()['response']
+        return clean_command(raw_res)
+    except Exception as e:
+        print(f"[-] AI Connection Error: {e}")
+        return None
+
+def main():
+    os.system('clear')
+    print("="*65)
+    print("   PENTEST-AI: THE FINAL UNLEASHED VERSION (V3.0)      ")
+    print("   AUTO-CLEANING ACTIVE | ZERO-FAULT LOGIC | 600+ TOOLS ")
+    print("="*65)
+    
+    while True:
+        try:
+            user_input = input("\n[God Mode] > ").strip()
+            if user_input.lower() in ['exit', 'quit']: break
+            if not user_input: continue
+
+            command = query_ollama(user_input)
+            
+            if command:
+                # কমান্ডটি যদি 'sudo' দিয়ে শুরু না হয় কিন্তু দরকার পড়ে, তবে নিজে থেকে যোগ করতে পারো
+                print(f"\n[!] GENERATED COMMAND: {command}")
+                
+                confirm = input("Execute now? (y/n): ").lower()
+                if confirm == 'y':
+                    print("[*] Running...\n")
+                    # সরাসরি টার্মিনাল আউটপুট দেখানোর জন্য subprocess.run ব্যবহার
+                    subprocess.run(command, shell=True)
+            else:
+                print("[-] Could not generate a valid command.")
+        except KeyboardInterrupt:
+            print("\n[!] Force closed.")
+            break
+
+if __name__ == "__main__":
+    main()
