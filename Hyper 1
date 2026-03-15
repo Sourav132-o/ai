@@ -1,0 +1,52 @@
+import os
+import subprocess
+import time
+
+class AICyberCommander:
+    def __init__(self, target_info):
+        self.target_data = target_info
+        print("[!] Toolset synchronization complete.")
+
+    def country_logic_adapter(self):
+        print(f"[!] Adapting protocols for region: {self.target_data.get('country', 'India')}")
+
+    def perform_recon(self):
+        print(f"[+] Starting OSINT on: {self.target_data.get('name', 'Target')}")
+        print("[!] Reconnaissance data analyzed.")
+
+    # --- THIS WAS MISSING ---
+    def deploy_phishing_server(self):
+        print("[+] Launching Phishing Infrastructure...")
+        print("[!] Phishing server active. Ready for social media interception.")
+
+    def deploy_media_trap(self):
+        print("[+] Deploying Invisible Media Trap...")
+        print("[!] Trap deployed. Monitoring for IP/Device hits.")
+
+    def execute_attack_chain(self):
+        print("[!] Analyzing best entry point...")
+        
+        # Decision logic for Social Media
+        if "social_id" in self.target_data:
+            self.deploy_phishing_server()
+        
+        # Decision logic for WhatsApp/Media
+        if "phone" in self.target_data:
+            self.deploy_media_trap()
+
+# ==========================================
+# MAIN EXECUTION
+# ==========================================
+if __name__ == "__main__":
+    # Your target input
+    user_input = {
+        "name": "Target_Name",
+        "phone": "+91XXXXXXXXXX",
+        "social_id": "profile_link",
+        "country": "India"
+    }
+
+    commander = AICyberCommander(user_input)
+    commander.country_logic_adapter()
+    commander.perform_recon()
+    commander.execute_attack_chain()
