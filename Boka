@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+import requests
+import subprocess
+import sys
+import re
+import time
+from termcolor import colored
+
+# ==============================================
+# CONFIGURATION
+# ==============================================
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "llama3"
+
+ALLOWED_TOOLS = [
+    "nmap", "gobuster", "sqlmap", "nikto", "dirsearch",
+    "whatweb", "enum4linux", "hydra", "ffuf", "msfvenom",
+    "phoneinfoga", "zphisher", "serveo", "ngrok", "msfconsole", "adb"
+]
+
+DANGEROUS_PATTERNS = [
+    r'\brm\s+-rf\b', r'\brm\s+-r\b.*\b/\b', r'\bdd\s+if=', r'\bmkfs\b',
+    r'\bchmod\s+777', r'\beval\b', r'\bwget\s+http', r'\bcurl\s+http'
+]
+
+def query_ollama(task):
+    try:
+        payload = {
+            "model": MODEL,
+            "prompt": f"Generate ONLY raw Kali Linux command for: {task}. No explanation, no quotes.",
+            "stream": False
+        }
+        r = requests.post(OLLAMA_URL, json=payload, timeout=30)
+        r.raise_for_status()
+        return r.json()['response'].strip().replace('`', '')
+    except Exception as e:
+        print(colored(f"[!] Ollama Error: {e}", "red"))
+        return None
+
+def check_security(cmd, user_input):
+    cmd_lower = cmd.lower()
+    input_lower = user_input.lower()
+
+    if 'sudo' in cmd_lower and 'extreme' not in input_lower:
+        print(colored("[!] sudo ব্যবহার করতে 'extreme' যোগ করো", "red"))
+        return False
+
+    for pat in DANGEROUS_PATTERNS:
+        if re.search(pat, cmd_lower):
+            if 'force' not in input_lower:
+                print(colored(f"[!] Dangerous pattern blocked: {pat}", "red"))
+                return False
+
+    return True
+
+def execute_command(cmd):
+    try:
+        print(colored(f"[>] Executing: {cmd}", "cyan"))
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+        print(colored("\n[OUTPUT]", "green"))
+        print(result.stdout)
+        if result.stderr:
+            print(colored(result.stderr, "yellow"))
+        
+        with open("sentinel_log.txt", "a") as f:
+            f.write(f"[{time.ctime()}] {cmd}\n{result.stdout}\n{'-'*60}\n")
+    except Exception as e:
+        print(colored(f"[!] Execution failed: {e}", "red"))
+
+def main():
+    if len(sys.argv) < 2:
+        print(colored("[!] Usage: python sentinel.py \"your task [extreme] [force]\"", "yellow"))
+        return
+
+    user_input = " ".join(sys.argv[1:])
+    print(colored(f"[*] Task: {user_input}", "magenta"))
+
+    command = query_ollama(user_input)
+    if not command:
+        print(colored("[!] AI failed to generate command.", "red"))
+        return
+
+    print(colored(f"[>] AI Generated Command:\n{command}", "green"))
+
+    if check_security(command, user_input):
+        if 'force' in user_input.lower():
+            print(colored("[*] Force mode activated!", "red"))
+            execute_command(command)
+        else:
+            confirm = input(colored("\n[?] Run this command? (y/n): ", "yellow")).strip().lower()
+            if confirm == 'y':
+                execute_command(command)
+            else:
+                print(colored("Aborted.", "red"))
+    else:
+        print(colored("[!] Command blocked by security filter.", "red"))
+
+if __name__ == "__main__":
+    main()
