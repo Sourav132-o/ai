@@ -1,0 +1,13 @@
+# ==============================================================================
+# OMNI-SENTINEL GLOBAL UPLINK (8080 ACTIVATED)
+# ==============================================================================
+GLOBAL_URL = "https://93857f69e278dc1a-77-232-108-15.serveo.net"
+LOCAL_PORT = 8888
+
+def initiate_global_attack():
+    print(f"[*] System Live at: {GLOBAL_URL}")
+    print(f"[*] Monitoring Traffic on Local Port: {LOCAL_PORT}")
+    print("[SUCCESS] Global Tunnel Active. Ready to intercept target device.")
+
+# আপনার আগের ইন্টারঅ্যাক্টিভ লুপটি এখানে শুরু হবে...
+initiate_global_attack()
