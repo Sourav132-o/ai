@@ -1,5 +1,5 @@
 """
-MayaTermux V11.0 — Self-Upgrading AI Crypto Intelligence
+MayaTermux V12.0 — Self-Upgrading AI Crypto Intelligence + Global Internet
 """
 import os
 import ast
@@ -9,8 +9,10 @@ import threading
 import importlib.util
 import json
 import textwrap
+import xml.etree.ElementTree as ET
 from typing import Optional
 
+import requests
 import ccxt
 import pandas as pd
 import google.generativeai as genai
@@ -20,13 +22,15 @@ BOSS_ID        = os.environ.get("BOSS_ID", "SUPREME_BOSS_01")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 EXCHANGE_ID    = os.environ.get("EXCHANGE_ID", "binance")
 PAPER_BALANCE  = float(os.environ.get("PAPER_BALANCE", "10000"))
-LEARN_INTERVAL = int(os.environ.get("LEARN_INTERVAL_SEC", "3600"))  # auto-learn cycle
+LEARN_INTERVAL = int(os.environ.get("LEARN_INTERVAL_SEC", "600"))   # 10-minute cycle
 
 if not GEMINI_API_KEY:
     raise EnvironmentError("Set GEMINI_API_KEY environment variable before running.")
 
 genai.configure(api_key=GEMINI_API_KEY)
-_DB = "maya_vault.db"
+_DB      = "maya_vault.db"
+_SESSION = requests.Session()
+_SESSION.headers.update({"User-Agent": "MayaTermux/12.0 (crypto-research-bot)"})
 
 
 # ── DB Helper ─────────────────────────────────────────────────────────────────
@@ -74,6 +78,209 @@ def _init_db():
     """)
     conn.commit()
     conn.close()
+
+
+# ── Web Intelligence ─────────────────────────────────────────────────────────
+class WebIntelligence:
+    """
+    Pulls live macro & sentiment data from public internet APIs.
+    All sources are free, no API key required.
+    """
+
+    # ── Fear & Greed ─────────────────────────────────────────────────────────
+    def fear_greed(self) -> dict:
+        """Alternative.me Crypto Fear & Greed Index."""
+        try:
+            r = _SESSION.get("https://api.alternative.me/fng/?limit=3", timeout=8)
+            r.raise_for_status()
+            data = r.json()["data"]
+            latest = data[0]
+            return {
+                "value":       int(latest["value"]),
+                "label":       latest["value_classification"],
+                "yesterday":   int(data[1]["value"]) if len(data) > 1 else None,
+                "last_week":   int(data[2]["value"]) if len(data) > 2 else None,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── CoinGecko Global Market ───────────────────────────────────────────────
+    def global_market(self) -> dict:
+        """Global crypto market cap, dominance, volume."""
+        try:
+            r = _SESSION.get("https://api.coingecko.com/api/v3/global", timeout=10)
+            r.raise_for_status()
+            d = r.json()["data"]
+            return {
+                "total_market_cap_usd":  round(d["total_market_cap"]["usd"] / 1e9, 2),  # $B
+                "total_volume_24h_usd":  round(d["total_volume"]["usd"] / 1e9, 2),
+                "btc_dominance":         round(d["market_cap_percentage"]["btc"], 2),
+                "eth_dominance":         round(d["market_cap_percentage"].get("eth", 0), 2),
+                "market_cap_change_24h": round(d["market_cap_change_percentage_24h_usd"], 2),
+                "active_coins":          d["active_cryptocurrencies"],
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Trending Coins ────────────────────────────────────────────────────────
+    def trending(self) -> list[dict]:
+        """Top-7 trending coins on CoinGecko."""
+        try:
+            r = _SESSION.get("https://api.coingecko.com/api/v3/search/trending", timeout=10)
+            r.raise_for_status()
+            coins = r.json()["coins"]
+            return [
+                {
+                    "rank":   c["item"]["market_cap_rank"],
+                    "name":   c["item"]["name"],
+                    "symbol": c["item"]["symbol"].upper(),
+                    "score":  round(c["item"].get("score", 0), 2),
+                }
+                for c in coins[:7]
+            ]
+        except Exception as e:
+            return [{"error": str(e)}]
+
+    # ── Top Movers ────────────────────────────────────────────────────────────
+    def top_movers(self, top_n: int = 5) -> dict:
+        """Biggest gainers and losers (top-250 by market cap)."""
+        try:
+            r = _SESSION.get(
+                "https://api.coingecko.com/api/v3/coins/markets",
+                params={
+                    "vs_currency": "usd",
+                    "order":       "market_cap_desc",
+                    "per_page":    250,
+                    "page":        1,
+                    "price_change_percentage": "24h",
+                },
+                timeout=12,
+            )
+            r.raise_for_status()
+            coins = r.json()
+            sorted_by_change = sorted(
+                [c for c in coins if c.get("price_change_percentage_24h") is not None],
+                key=lambda x: x["price_change_percentage_24h"],
+            )
+            losers  = sorted_by_change[:top_n]
+            gainers = sorted_by_change[-top_n:][::-1]
+            fmt = lambda c: f"{c['symbol'].upper()} {c['price_change_percentage_24h']:+.2f}%"
+            return {
+                "gainers": [fmt(c) for c in gainers],
+                "losers":  [fmt(c) for c in losers],
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── News Headlines via RSS ────────────────────────────────────────────────
+    def news(self, limit: int = 6) -> list[str]:
+        """Latest crypto headlines from CoinDesk RSS."""
+        try:
+            r = _SESSION.get("https://www.coindesk.com/arc/outboundfeeds/rss/", timeout=10)
+            r.raise_for_status()
+            root  = ET.fromstring(r.content)
+            items = root.findall(".//item")[:limit]
+            return [item.findtext("title", "").strip() for item in items]
+        except Exception:
+            # Fallback: CoinTelegraph
+            try:
+                r = _SESSION.get("https://cointelegraph.com/rss", timeout=10)
+                r.raise_for_status()
+                root  = ET.fromstring(r.content)
+                items = root.findall(".//item")[:limit]
+                return [item.findtext("title", "").strip() for item in items]
+            except Exception as e:
+                return [f"News unavailable: {e}"]
+
+    # ── Bitcoin On-Chain (mempool.space) ─────────────────────────────────────
+    def btc_mempool(self) -> dict:
+        """BTC mempool size and recommended fees from mempool.space."""
+        try:
+            fees = _SESSION.get("https://mempool.space/api/v1/fees/recommended", timeout=8)
+            fees.raise_for_status()
+            f = fees.json()
+            mempool = _SESSION.get("https://mempool.space/api/mempool", timeout=8)
+            mempool.raise_for_status()
+            m = mempool.json()
+            return {
+                "mempool_tx_count": m.get("count", "?"),
+                "mempool_size_mb":  round(m.get("vsize", 0) / 1e6, 2),
+                "fee_fastest_sat":  f.get("fastestFee"),
+                "fee_hour_sat":     f.get("hourFee"),
+                "fee_economy_sat":  f.get("economyFee"),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Composite Snapshot ────────────────────────────────────────────────────
+    def snapshot(self) -> dict:
+        """Fetch all web intel in parallel and return a unified dict."""
+        results = {}
+        lock    = threading.Lock()
+
+        def fetch(key, fn):
+            data = fn()
+            with lock:
+                results[key] = data
+
+        tasks = [
+            ("fear_greed",    self.fear_greed),
+            ("global_market", self.global_market),
+            ("trending",      self.trending),
+            ("top_movers",    self.top_movers),
+            ("news",          self.news),
+            ("btc_mempool",   self.btc_mempool),
+        ]
+        threads = [threading.Thread(target=fetch, args=(k, fn)) for k, fn in tasks]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        return results
+
+    def format_snapshot(self, snap: dict) -> str:
+        lines = ["\n── Global Web Intel ─────────────────────────────────────"]
+
+        fg = snap.get("fear_greed", {})
+        if "error" not in fg:
+            lines.append(
+                f"  Fear & Greed : {fg['value']} ({fg['label']}) "
+                f"| Yesterday: {fg['yesterday']} | Last Week: {fg['last_week']}"
+            )
+
+        gm = snap.get("global_market", {})
+        if "error" not in gm:
+            lines.append(
+                f"  Market Cap   : ${gm['total_market_cap_usd']}B "
+                f"({gm['market_cap_change_24h']:+.2f}% 24h)"
+            )
+            lines.append(
+                f"  Volume 24h   : ${gm['total_volume_24h_usd']}B "
+                f"| BTC Dom: {gm['btc_dominance']}% | ETH Dom: {gm['eth_dominance']}%"
+            )
+
+        movers = snap.get("top_movers", {})
+        if "error" not in movers:
+            lines.append(f"  Top Gainers  : {', '.join(movers.get('gainers', []))}")
+            lines.append(f"  Top Losers   : {', '.join(movers.get('losers', []))}")
+
+        trend = snap.get("trending", [])
+        if trend and "error" not in trend[0]:
+            names = ", ".join(f"{t['symbol']}(#{t['rank']})" for t in trend[:5])
+            lines.append(f"  Trending     : {names}")
+
+        mempool = snap.get("btc_mempool", {})
+        if "error" not in mempool:
+            lines.append(
+                f"  BTC Mempool  : {mempool['mempool_tx_count']} txs "
+                f"| Fee fastest/hour: {mempool['fee_fastest_sat']}/{mempool['fee_hour_sat']} sat/vB"
+            )
+
+        news = snap.get("news", [])
+        if news:
+            lines.append("  Headlines    :")
+            for h in news[:4]:
+                lines.append(f"    • {h}")
+
+        return "\n".join(lines)
 
 
 # ── Technical Indicators ──────────────────────────────────────────────────────
@@ -480,27 +687,47 @@ class SkillRegistry:
 
 # ── AI Analyst ────────────────────────────────────────────────────────────────
 class AIAnalyst:
-    def __init__(self, knowledge: KnowledgeBase):
+    def __init__(self, knowledge: KnowledgeBase, web: "WebIntelligence"):
         self.model     = genai.GenerativeModel("gemini-1.5-pro")
         self.chat      = self.model.start_chat(history=[])
         self.knowledge = knowledge
+        self.web       = web
 
-    def analyze(self, data: dict) -> str:
+    def analyze(self, data: dict, include_web: bool = True) -> str:
         context = self.knowledge.recall(data["symbol"], limit=3)
         ctx_block = ""
         if context:
-            ctx_block = "\nPast observations:\n" + "\n".join(f"- {c}" for c in context) + "\n"
+            ctx_block = "Past observations:\n" + "\n".join(f"- {c}" for c in context) + "\n\n"
+
+        web_block = ""
+        if include_web:
+            try:
+                snap = self.web.snapshot()
+                fg   = snap.get("fear_greed", {})
+                gm   = snap.get("global_market", {})
+                news = snap.get("news", [])
+                web_block = (
+                    f"Global market context:\n"
+                    f"- Fear & Greed: {fg.get('value','?')} ({fg.get('label','?')})\n"
+                    f"- Market cap change 24h: {gm.get('market_cap_change_24h','?')}%\n"
+                    f"- BTC dominance: {gm.get('btc_dominance','?')}%\n"
+                    f"- Top news: {'; '.join(news[:3])}\n\n"
+                )
+            except Exception:
+                pass
 
         prompt = (
-            f"You are a senior crypto quant analyst.\n"
-            f"{ctx_block}\n"
-            f"Current market snapshot:\n{json.dumps(data, indent=2)}\n\n"
-            f"Provide a structured analysis:\n"
-            f"1. Market condition & momentum (cite specific indicator values)\n"
-            f"2. Key risk factors, support/resistance from BB + EMA + VWAP\n"
-            f"3. Concrete trade recommendation with entry, stop-loss, take-profit\n"
-            f"4. Confidence score 0-100 based on signal alignment\n"
-            f"Be specific. No generic statements."
+            f"You are a senior crypto quant analyst with access to real-time global market data.\n\n"
+            f"{ctx_block}"
+            f"{web_block}"
+            f"Technical snapshot:\n{json.dumps(data, indent=2)}\n\n"
+            f"Provide structured analysis:\n"
+            f"1. Market condition & momentum — cite exact indicator values\n"
+            f"2. Macro context — how does global sentiment/dominance affect this asset?\n"
+            f"3. Key support/resistance from BB + EMA + VWAP levels\n"
+            f"4. Concrete trade plan: entry zone, stop-loss, take-profit targets\n"
+            f"5. Confidence score 0-100 and primary risk to the thesis\n"
+            f"Be data-driven. No generic statements."
         )
         result = self.chat.send_message(prompt).text.strip()
         self.knowledge.store(
@@ -636,19 +863,21 @@ class PriceMonitor:
 # ── Auto-Learning Loop ────────────────────────────────────────────────────────
 class LearningLoop:
     """
-    Background thread that periodically:
-    1. Scans key markets and stores insights in KnowledgeBase
-    2. Reviews skill success rates and auto-upgrades weak performers
-    3. Logs a learning summary to intel
+    Background thread (every 10 min) that:
+    1. Fetches global web intel (Fear & Greed, market cap, news)
+    2. Scans key markets and stores technical insights
+    3. Auto-upgrades skills with low success rates
+    4. Logs a full summary to intel DB
     """
 
-    WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+    WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT"]
 
     def __init__(self, market: MarketEngine, knowledge: KnowledgeBase,
-                 skills: SkillRegistry, model):
+                 skills: SkillRegistry, web: "WebIntelligence", model):
         self.market    = market
         self.knowledge = knowledge
         self.skills    = skills
+        self.web       = web
         self.model     = model
         self._active   = False
         self._thread: Optional[threading.Thread] = None
@@ -660,34 +889,69 @@ class LearningLoop:
         self._active = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        return f"Auto-learn started (cycle every {LEARN_INTERVAL}s)."
+        return f"Auto-learn started — cycle every {LEARN_INTERVAL}s ({LEARN_INTERVAL//60} min)."
 
     def stop(self):
         self._active = False
         return "Auto-learn stopped."
 
     def run_once(self) -> str:
-        """Run a single learning cycle synchronously."""
         return self._cycle()
 
     def _cycle(self) -> str:
         self.cycles += 1
-        log = [f"[LEARN] Cycle #{self.cycles}"]
+        log = [f"[LEARN] Cycle #{self.cycles} @ {time.strftime('%H:%M:%S')}"]
 
-        # 1. Market scans → knowledge base
+        # ── 1. Global web intel ───────────────────────────────────────────────
+        try:
+            snap = self.web.snapshot()
+            fg   = snap.get("fear_greed", {})
+            gm   = snap.get("global_market", {})
+            news = snap.get("news", [])
+
+            if "error" not in fg:
+                self.knowledge.store(
+                    "GLOBAL",
+                    f"Fear&Greed={fg['value']}({fg['label']}) "
+                    f"mcap_chg={gm.get('market_cap_change_24h','?')}% "
+                    f"btc_dom={gm.get('btc_dominance','?')}%",
+                    tags="global,sentiment,auto",
+                )
+                log.append(f"  Web intel: F&G={fg['value']}({fg['label']}) "
+                           f"mkt_chg={gm.get('market_cap_change_24h','?')}%")
+
+            for headline in news[:3]:
+                self.knowledge.store("NEWS", headline, tags="news,auto")
+            if news:
+                log.append(f"  Stored {len(news[:3])} headlines")
+
+            movers = snap.get("top_movers", {})
+            if "error" not in movers:
+                self.knowledge.store(
+                    "MOVERS",
+                    f"Gainers: {', '.join(movers.get('gainers',[]))} | "
+                    f"Losers: {', '.join(movers.get('losers',[]))}",
+                    tags="movers,auto",
+                )
+        except Exception as e:
+            log.append(f"  Web intel error: {e}")
+
+        # ── 2. Technical market scans ─────────────────────────────────────────
         for sym in self.WATCHLIST:
             try:
                 data = self.market.full_analysis(sym)
-                insight = (
-                    f"price={data['price']} rsi={data['rsi']} "
-                    f"signal={data['signal']} score={data['score']} vol_ratio={data['vol_ratio']}"
+                self.knowledge.store(
+                    sym,
+                    f"price={data['price']} rsi={data['rsi']} stoch={data['stoch_rsi']} "
+                    f"macd={data['macd_hist']} vol={data['vol_ratio']}x "
+                    f"signal={data['signal']} score={data['score']}",
+                    tags=f"{sym},technical,auto",
                 )
-                self.knowledge.store(sym, insight, tags=f"{sym},auto")
-                log.append(f"  Stored insight: {sym} → {data['signal']}")
+                log.append(f"  {sym}: {data['signal']} (score={data['score']:+.2f})")
             except Exception as e:
                 log.append(f"  Scan error {sym}: {e}")
 
-        # 2. Auto-upgrade skills with low success rates
+        # ── 3. Auto-upgrade weak skills ───────────────────────────────────────
         conn = _db()
         weak = conn.execute(
             """SELECT name FROM skills
@@ -697,11 +961,15 @@ class LearningLoop:
         conn.close()
         for row in weak:
             try:
-                _, ver = self.skills.upgrade(self.model, row["name"], "Low success rate — improve robustness")
+                _, ver = self.skills.upgrade(
+                    self.model, row["name"],
+                    "Low success rate — improve robustness and error handling",
+                )
                 log.append(f"  Auto-upgraded: {row['name']} → v{ver}")
             except Exception as e:
                 log.append(f"  Upgrade failed {row['name']}: {e}")
 
+        # ── 4. Persist summary ────────────────────────────────────────────────
         summary = "\n".join(log)
         conn = _db()
         conn.execute(
@@ -724,28 +992,39 @@ class LearningLoop:
     @property
     def status(self) -> str:
         state = "RUNNING" if self._active else "STOPPED"
-        return f"Auto-learn: {state} | Cycles completed: {self.cycles} | Interval: {LEARN_INTERVAL}s"
+        kb    = self.knowledge.count()
+        return (
+            f"Auto-learn : {state}\n"
+            f"Cycles     : {self.cycles}\n"
+            f"Interval   : {LEARN_INTERVAL}s ({LEARN_INTERVAL//60} min)\n"
+            f"Knowledge  : {kb} entries\n"
+            f"Watchlist  : {', '.join(self.WATCHLIST)}"
+        )
 
 
 # ── Core Bot ──────────────────────────────────────────────────────────────────
 class MayaTermux:
     def __init__(self):
         _init_db()
-        self.market   = MarketEngine(EXCHANGE_ID)
+        self.market    = MarketEngine(EXCHANGE_ID)
         self.knowledge = KnowledgeBase()
-        self.skills   = SkillRegistry()
-        self.ai       = AIAnalyst(self.knowledge)
-        self.paper    = PaperTrader(PAPER_BALANCE)
-        self.monitor  = PriceMonitor(self.market)
-        self.learner  = LearningLoop(self.market, self.knowledge, self.skills, self.ai.model)
+        self.web       = WebIntelligence()
+        self.skills    = SkillRegistry()
+        self.ai        = AIAnalyst(self.knowledge, self.web)
+        self.paper     = PaperTrader(PAPER_BALANCE)
+        self.monitor   = PriceMonitor(self.market)
+        self.learner   = LearningLoop(
+            self.market, self.knowledge, self.skills, self.web, self.ai.model
+        )
 
         print(
             f"\n{'='*60}\n"
-            f"  MAYA V11.0  |  EXCHANGE: {EXCHANGE_ID.upper()}\n"
+            f"  MAYA V12.0  |  EXCHANGE: {EXCHANGE_ID.upper()}\n"
             f"  BOSS: {BOSS_ID}\n"
             f"  PAPER BALANCE : {self.paper.balance():.2f} USDT\n"
             f"  KNOWLEDGE BASE: {self.knowledge.count()} entries\n"
             f"  SKILLS LOADED : {len(self.skills.names)}\n"
+            f"  AUTO-LEARN    : every {LEARN_INTERVAL//60} min\n"
             f"{'='*60}\n"
             f"  Type 'help' for commands.\n"
         )
@@ -953,6 +1232,36 @@ class MayaTermux:
             return "No intel logged yet."
         return "\n".join(f"  [{r['ts']}] {r['topic']}: {r['data'][:90]}..." for r in rows)
 
+    def cmd_webintel(self, args):
+        """Fetch and display live global web intelligence snapshot."""
+        section = args[0].lower() if args else "all"
+        try:
+            if section == "news":
+                return "\n  ".join(["Headlines:"] + self.web.news(10))
+            if section == "fear":
+                fg = self.web.fear_greed()
+                return (
+                    f"  Fear & Greed : {fg.get('value')} ({fg.get('label')})\n"
+                    f"  Yesterday    : {fg.get('yesterday')}\n"
+                    f"  Last week    : {fg.get('last_week')}"
+                )
+            if section == "market":
+                gm = self.web.global_market()
+                return json.dumps(gm, indent=2)
+            if section == "movers":
+                mv = self.web.top_movers()
+                return (
+                    f"  Gainers: {', '.join(mv.get('gainers', []))}\n"
+                    f"  Losers : {', '.join(mv.get('losers', []))}"
+                )
+            if section == "mempool":
+                return json.dumps(self.web.btc_mempool(), indent=2)
+            # default: full snapshot
+            snap = self.web.snapshot()
+            return self.web.format_snapshot(snap)
+        except Exception as e:
+            return f"Error fetching web intel: {e}"
+
     # ── Dispatcher ────────────────────────────────────────────────────────────
 
     HELP = """
@@ -967,6 +1276,10 @@ class MayaTermux:
   sell    <SYMBOL> <USDT>     paper sell
   balance                     paper account balance
   trades  [n]                 last n paper trades
+
+━━ GLOBAL INTERNET ──────────────────────────────────────
+  webintel [all|fear|market|movers|news|mempool]
+                              live global crypto intel
 
 ━━ MONITORING ───────────────────────────────────────────
   watch   <SYMBOL> [pct]      alert on ±pct% price move
@@ -1021,6 +1334,7 @@ class MayaTermux:
             "summarize": self.cmd_summarize,
             "autolearn": self.cmd_autolearn,
             "intel":     self.cmd_intel,
+            "webintel":  self.cmd_webintel,
             "help":      lambda _: self.HELP,
             "?":         lambda _: self.HELP,
         }
