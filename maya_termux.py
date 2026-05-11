@@ -1,5 +1,5 @@
 """
-MayaTermux V13.0 — Self-Upgrading AI Crypto Intelligence + Global Internet + OS Nexus
+MayaTermux V14.0 — Self-Upgrading AI Crypto Intelligence + Global Internet + OS Nexus
 """
 import os
 import ast
@@ -34,7 +34,7 @@ _CLIENT  = genai.Client(api_key=GEMINI_API_KEY)
 _MODEL   = "gemini-2.0-flash"           # fast + capable
 _DB      = "maya_vault.db"
 _SESSION = requests.Session()
-_SESSION.headers.update({"User-Agent": "MayaTermux/13.0 (crypto-research-bot)"})
+_SESSION.headers.update({"User-Agent": "MayaTermux/14.0 (crypto-research-bot)"})
 
 
 # ── DB Helper ─────────────────────────────────────────────────────────────────
@@ -1032,9 +1032,14 @@ class OSNexus:
 
     # Only tools on this list can be called.  Extend deliberately.
     ALLOWED = {
+        # network scanners & web testing
         "nmap", "nikto", "gobuster", "ffuf", "sqlmap", "wfuzz",
-        "curl", "wget", "dig", "whois", "ping", "traceroute",
+        # passive recon / OSINT
+        "sherlock", "theHarvester", "curl", "wget",
+        "dig", "whois", "ping", "traceroute", "host", "nslookup",
+        # local network diagnostics
         "netstat", "ss", "ip", "ifconfig", "arp",
+        # scripting
         "python3", "python",
     }
 
@@ -1202,7 +1207,7 @@ class MayaTermux:
 
         print(
             f"\n{'='*60}\n"
-            f"  MAYA V13.0  |  EXCHANGE: {EXCHANGE_ID.upper()}\n"
+            f"  MAYA V14.0  |  EXCHANGE: {EXCHANGE_ID.upper()}\n"
             f"  BOSS: {BOSS_ID}\n"
             f"  PAPER BALANCE : {self.paper.balance():.2f} USDT\n"
             f"  KNOWLEDGE BASE: {self.knowledge.count()} entries\n"
@@ -1415,6 +1420,61 @@ class MayaTermux:
             return "No intel logged yet."
         return "\n".join(f"  [{r['ts']}] {r['topic']}: {r['data'][:90]}..." for r in rows)
 
+    def cmd_recon(self, args) -> str:
+        """Passive DNS + geolocation recon on a domain or IP (requires declared scope)."""
+        if not args:
+            return "Usage: recon <domain | ip>"
+        target = args[0]
+        if not self.os_nexus._scope:
+            return "Declare scope first: os declare <target>"
+
+        lines = [f"Recon: {target}"]
+
+        # DNS lookup
+        dns = self.os_nexus.run(f"dig +short {target}")
+        lines.append(f"DNS  : {dns.strip() or '(no result)'}")
+
+        # Reverse / WHOIS summary
+        whois_out = self.os_nexus.run(f"whois {target}")
+        # Extract only the most useful WHOIS lines
+        useful = [
+            l for l in whois_out.splitlines()
+            if any(k in l.lower() for k in ("registrar", "country", "org", "netname", "cidr", "created", "expir"))
+        ]
+        lines.append("WHOIS:\n" + "\n".join(f"  {l.strip()}" for l in useful[:10]))
+
+        # IP geolocation (public, no-auth API)
+        ip = dns.strip().splitlines()[0] if dns.strip() else target
+        try:
+            geo = _SESSION.get(f"https://ip-api.com/json/{ip}?fields=status,city,regionName,country,isp,org,as", timeout=6).json()
+            if geo.get("status") == "success":
+                lines.append(
+                    f"Geo  : {geo.get('city')}, {geo.get('regionName')}, {geo.get('country')}\n"
+                    f"ISP  : {geo.get('isp')} | {geo.get('org')}\n"
+                    f"ASN  : {geo.get('as')}"
+                )
+        except Exception:
+            pass
+
+        result = "\n".join(lines)
+        self._log("recon", result)
+        return result
+
+    def cmd_social(self, args) -> str:
+        """OSINT: find public accounts for a username across platforms (sherlock)."""
+        if not args:
+            return "Usage: social <username>"
+        username = args[0]
+        if not self.os_nexus._scope:
+            return (
+                "Declare scope first.\n"
+                "Example: os declare <username> (confirms you have authorization to research this person)"
+            )
+        print(f"[OSINT] Running sherlock on: {username} (this may take 30–60s)...")
+        result = self.os_nexus.run(f"sherlock {username} --timeout 10 --print-found")
+        self._log("social_osint", f"username={username}\n{result[:2000]}")
+        return result or "No results or sherlock not installed. Run: pip install sherlock-project"
+
     def cmd_os(self, args) -> str:
         """Route all 'os' sub-commands to OSNexus."""
         if not args:
@@ -1517,6 +1577,10 @@ class MayaTermux:
   webintel [all|fear|market|movers|news|mempool]
                               live global crypto intel
 
+━━ PASSIVE RECON / OSINT ────────────────────────────────
+  recon  <domain|ip>          DNS + WHOIS + geolocation (scope required)
+  social <username>           find public accounts via sherlock (scope required)
+
 ━━ OS NEXUS (AUTHORIZED PENTEST) ────────────────────────
   os declare <target>         set authorized scope (required first)
   os exec <tool> [args]       run allowlisted tool (nmap, sqlmap, etc.)
@@ -1579,6 +1643,8 @@ class MayaTermux:
             "autolearn": self.cmd_autolearn,
             "intel":     self.cmd_intel,
             "os":        self.cmd_os,
+            "recon":     self.cmd_recon,
+            "social":    self.cmd_social,
             "webintel":  self.cmd_webintel,
             "help":      lambda _: self.HELP,
             "?":         lambda _: self.HELP,
