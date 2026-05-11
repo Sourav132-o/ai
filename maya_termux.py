@@ -1,5 +1,5 @@
 """
-MayaTermux V12.0 — Self-Upgrading AI Crypto Intelligence + Global Internet
+MayaTermux V13.0 — Self-Upgrading AI Crypto Intelligence + Global Internet + OS Nexus
 """
 import os
 import ast
@@ -10,12 +10,15 @@ import importlib.util
 import json
 import textwrap
 import xml.etree.ElementTree as ET
+import subprocess
+import shlex
 from typing import Optional
 
 import requests
 import ccxt
 import pandas as pd
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BOSS_ID        = os.environ.get("BOSS_ID", "SUPREME_BOSS_01")
@@ -27,10 +30,11 @@ LEARN_INTERVAL = int(os.environ.get("LEARN_INTERVAL_SEC", "600"))   # 10-minute 
 if not GEMINI_API_KEY:
     raise EnvironmentError("Set GEMINI_API_KEY environment variable before running.")
 
-genai.configure(api_key=GEMINI_API_KEY)
+_CLIENT  = genai.Client(api_key=GEMINI_API_KEY)
+_MODEL   = "gemini-2.0-flash"           # fast + capable
 _DB      = "maya_vault.db"
 _SESSION = requests.Session()
-_SESSION.headers.update({"User-Agent": "MayaTermux/12.0 (crypto-research-bot)"})
+_SESSION.headers.update({"User-Agent": "MayaTermux/13.0 (crypto-research-bot)"})
 
 
 # ── DB Helper ─────────────────────────────────────────────────────────────────
@@ -419,7 +423,7 @@ class KnowledgeBase:
         conn.close()
         return [r["insight"] for r in rows]
 
-    def summarize(self, model, topic: str) -> str:
+    def summarize(self, _unused, topic: str) -> str:
         entries = self.recall(topic, limit=20)
         if not entries:
             return f"No knowledge stored about '{topic}' yet."
@@ -428,7 +432,7 @@ class KnowledgeBase:
             f"Summarize these market observations about {topic} into 3 key actionable insights:\n"
             f"{joined}"
         )
-        return model.generate_content(prompt).text.strip()
+        return _CLIENT.models.generate_content(model=_MODEL, contents=prompt).text.strip()
 
     def count(self) -> int:
         conn = _db()
@@ -519,7 +523,7 @@ class SkillRegistry:
 
     # ── public API ───────────────────────────────────────────────────────────
 
-    def create(self, model, task: str, name: Optional[str] = None) -> tuple[str, str]:
+    def create(self, _unused, task: str, name: Optional[str] = None) -> tuple[str, str]:
         """Generate, validate, persist and hot-load a new skill. Returns (name, description)."""
         prompt = textwrap.dedent(f"""
             Write a Python class named 'Skill' with ONE method:
@@ -535,14 +539,15 @@ class SkillRegistry:
 
             Return ONLY valid Python code. No markdown fences.
         """)
-        raw  = model.generate_content(prompt).text
+        raw  = _CLIENT.models.generate_content(model=_MODEL, contents=prompt).text
         code = self._clean_code(raw)
 
         ok, err = self._validate_syntax(code)
         if not ok:
-            # Ask Gemini to fix it
             fix_prompt = f"Fix this Python syntax error: {err}\n\nCode:\n{code}\n\nReturn ONLY fixed code."
-            code = self._clean_code(model.generate_content(fix_prompt).text)
+            code = self._clean_code(
+                _CLIENT.models.generate_content(model=_MODEL, contents=fix_prompt).text
+            )
             ok, err = self._validate_syntax(code)
             if not ok:
                 raise ValueError(f"Syntax error after repair attempt: {err}")
@@ -554,7 +559,7 @@ class SkillRegistry:
         self._save_to_db(skill_name, task, desc, path, version=1)
         return skill_name, desc
 
-    def upgrade(self, model, name: str, feedback: str = "") -> tuple[str, int]:
+    def upgrade(self, _unused, name: str, feedback: str = "") -> tuple[str, int]:
         """
         Read existing skill code, ask Gemini to improve it, hot-swap in place.
         Returns (description, new_version).
@@ -588,7 +593,7 @@ class SkillRegistry:
             Keep class name 'Skill' and method signature 'execute(self, **kwargs) -> str'.
             Return ONLY valid Python code. No markdown fences.
         """)
-        raw  = model.generate_content(prompt).text
+        raw  = _CLIENT.models.generate_content(model=_MODEL, contents=prompt).text
         code = self._clean_code(raw)
         ok, err = self._validate_syntax(code)
         if not ok:
@@ -601,7 +606,7 @@ class SkillRegistry:
         self._save_to_db(name, row["task"], desc, path, new_version)
         return desc, new_version
 
-    def upgrade_all(self, model) -> list[str]:
+    def upgrade_all(self, _unused=None) -> list[str]:
         """Upgrade every registered skill. Returns list of results."""
         conn = _db()
         rows = conn.execute("SELECT name FROM skills").fetchall()
@@ -688,10 +693,23 @@ class SkillRegistry:
 # ── AI Analyst ────────────────────────────────────────────────────────────────
 class AIAnalyst:
     def __init__(self, knowledge: KnowledgeBase, web: "WebIntelligence"):
-        self.model     = genai.GenerativeModel("gemini-1.5-pro")
-        self.chat      = self.model.start_chat(history=[])
         self.knowledge = knowledge
         self.web       = web
+        self._history: list[types.Content] = []   # persistent multi-turn chat
+
+    def _chat(self, prompt: str) -> str:
+        self._history.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
+        resp = _CLIENT.models.generate_content(
+            model=_MODEL,
+            contents=self._history,
+        )
+        reply = resp.text.strip()
+        self._history.append(types.Content(role="model", parts=[types.Part(text=reply)]))
+        return reply
+
+    def _generate(self, prompt: str) -> str:
+        resp = _CLIENT.models.generate_content(model=_MODEL, contents=prompt)
+        return resp.text.strip()
 
     def analyze(self, data: dict, include_web: bool = True) -> str:
         context = self.knowledge.recall(data["symbol"], limit=3)
@@ -729,7 +747,7 @@ class AIAnalyst:
             f"5. Confidence score 0-100 and primary risk to the thesis\n"
             f"Be data-driven. No generic statements."
         )
-        result = self.chat.send_message(prompt).text.strip()
+        result = self._chat(prompt)
         self.knowledge.store(
             topic=data["symbol"],
             insight=f"[{data['timeframe']}] price={data['price']} signal={data['signal']} score={data['score']}",
@@ -738,7 +756,7 @@ class AIAnalyst:
         return result
 
     def ask(self, question: str) -> str:
-        return self.chat.send_message(question).text.strip()
+        return self._chat(question)
 
     def generate_skill_code(self, task: str) -> str:
         prompt = textwrap.dedent(f"""
@@ -748,7 +766,7 @@ class AIAnalyst:
             Include a one-line class docstring.
             Return ONLY valid Python code. No markdown fences.
         """)
-        raw  = self.model.generate_content(prompt).text
+        raw  = self._generate(prompt)
         code = raw.strip()
         if code.startswith("```"):
             code = "\n".join(code.splitlines()[1:])
@@ -873,12 +891,11 @@ class LearningLoop:
     WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT"]
 
     def __init__(self, market: MarketEngine, knowledge: KnowledgeBase,
-                 skills: SkillRegistry, web: "WebIntelligence", model):
+                 skills: SkillRegistry, web: "WebIntelligence"):
         self.market    = market
         self.knowledge = knowledge
         self.skills    = skills
         self.web       = web
-        self.model     = model
         self._active   = False
         self._thread: Optional[threading.Thread] = None
         self.cycles    = 0
@@ -962,7 +979,7 @@ class LearningLoop:
         for row in weak:
             try:
                 _, ver = self.skills.upgrade(
-                    self.model, row["name"],
+                    None, row["name"],
                     "Low success rate — improve robustness and error handling",
                 )
                 log.append(f"  Auto-upgraded: {row['name']} → v{ver}")
@@ -1002,6 +1019,173 @@ class LearningLoop:
         )
 
 
+# ── OS Nexus (Authorized Pentest Interface) ───────────────────────────────────
+class OSNexus:
+    """
+    Controlled OS interface for authorized penetration testing.
+    - Hard allowlist of permitted tools — nothing outside the list executes
+    - No shell=True; args are always passed as a list
+    - Every command is logged to intel DB with full timestamp
+    - Output is capped to prevent flooding
+    - AI script generation shows code for review; never auto-executes
+    """
+
+    # Only tools on this list can be called.  Extend deliberately.
+    ALLOWED = {
+        "nmap", "nikto", "gobuster", "ffuf", "sqlmap", "wfuzz",
+        "curl", "wget", "dig", "whois", "ping", "traceroute",
+        "netstat", "ss", "ip", "ifconfig", "arp",
+        "python3", "python",
+    }
+
+    MAX_OUTPUT = 8000   # chars
+    TIMEOUT    = 120    # seconds
+
+    def __init__(self):
+        self._active: dict[str, subprocess.Popen] = {}
+        self._scope: Optional[str] = None          # declared target scope
+
+    # ── Scope gate ────────────────────────────────────────────────────────────
+    def declare_scope(self, scope: str) -> str:
+        """
+        Operator must declare scope before running any tool.
+        Example: 'declare 192.168.1.0/24' or 'declare testlab.local'
+        """
+        self._scope = scope
+        self._log("scope_declared", f"Scope set to: {scope}")
+        return f"Scope declared: {scope}. Tools are now unlocked for this target."
+
+    def clear_scope(self) -> str:
+        self._scope = None
+        return "Scope cleared. All pentest tools are locked."
+
+    # ── Logging ───────────────────────────────────────────────────────────────
+    def _log(self, topic: str, data: str):
+        conn = _db()
+        conn.execute(
+            "INSERT INTO intel (topic,data,ts) VALUES (?,?,datetime('now'))",
+            (f"os_{topic}", data[:4000]),
+        )
+        conn.commit()
+        conn.close()
+
+    # ── Command runner ────────────────────────────────────────────────────────
+    def run(self, raw_cmd: str) -> str:
+        """
+        Execute an allowlisted tool synchronously.
+        raw_cmd is split into argv — no shell expansion.
+        """
+        if not self._scope:
+            return (
+                "No scope declared. Run:\n"
+                "  os declare <target-ip/domain>\n"
+                "before using pentest tools."
+            )
+
+        argv = shlex.split(raw_cmd)
+        if not argv:
+            return "Empty command."
+
+        tool = os.path.basename(argv[0]).lower()
+        if tool not in self.ALLOWED:
+            return (
+                f"Tool '{tool}' is not on the allowlist.\n"
+                f"Permitted: {', '.join(sorted(self.ALLOWED))}"
+            )
+
+        self._log("cmd_start", f"[scope={self._scope}] {raw_cmd}")
+        try:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=self.TIMEOUT,
+            )
+            out = (proc.stdout + proc.stderr).strip()
+            out = out[: self.MAX_OUTPUT] + ("…[truncated]" if len(out) > self.MAX_OUTPUT else "")
+            self._log("cmd_done", out[:2000])
+            return out or "(no output)"
+        except subprocess.TimeoutExpired:
+            return f"[TIMEOUT] Command exceeded {self.TIMEOUT}s."
+        except FileNotFoundError:
+            return f"[NOT FOUND] '{argv[0]}' is not installed."
+        except Exception as e:
+            return f"[ERROR] {e}"
+
+    def run_bg(self, name: str, raw_cmd: str) -> str:
+        """Start a long-running tool in the background; output goes to intel DB."""
+        if not self._scope:
+            return "No scope declared. Run 'os declare <target>' first."
+        argv = shlex.split(raw_cmd)
+        tool = os.path.basename(argv[0]).lower()
+        if tool not in self.ALLOWED:
+            return f"Tool '{tool}' not on allowlist."
+
+        def _worker():
+            try:
+                proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                self._active[name] = proc
+                out, _ = proc.communicate(timeout=600)
+                self._log(f"bg_{name}", out[:4000])
+                self._active.pop(name, None)
+                print(f"\n[OS-BG] Task '{name}' finished. Check 'intel 3' for output.")
+            except Exception as e:
+                self._log(f"bg_{name}_error", str(e))
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return f"Background task '{name}' started. Use 'intel 3' to see output when done."
+
+    def list_tasks(self) -> str:
+        if not self._active:
+            return "No background tasks running."
+        return "\n".join(f"  • {k}" for k in self._active)
+
+    def kill_task(self, name: str) -> str:
+        proc = self._active.pop(name, None)
+        if not proc:
+            return f"No task named '{name}'."
+        proc.terminate()
+        return f"Task '{name}' terminated."
+
+    def generate_script(self, task: str) -> str:
+        """
+        Ask Gemini to write a pentest script for the declared scope.
+        Returns the code for HUMAN REVIEW — does NOT execute it.
+        """
+        if not self._scope:
+            return "Declare scope first: os declare <target>"
+        prompt = (
+            f"Write a Python script for an authorized penetration test against: {self._scope}\n"
+            f"Task: {task}\n"
+            f"Requirements: use only stdlib + requests, print results, handle errors gracefully.\n"
+            f"Return ONLY valid Python code. No markdown fences."
+        )
+        code = _CLIENT.models.generate_content(model=_MODEL, contents=prompt).text.strip()
+        if code.startswith("```"):
+            code = "\n".join(code.splitlines()[1:])
+        if "```" in code:
+            code = code[:code.rindex("```")]
+        code = code.strip()
+
+        filename = f"pentest_{int(time.time())}.py"
+        with open(filename, "w") as f:
+            f.write(code)
+        self._log("script_generated", f"file={filename} task={task}")
+        return (
+            f"Script saved to: {filename}\n"
+            f"Review it, then run: os exec python3 {filename}\n\n"
+            f"{'─'*50}\n{code}"
+        )
+
+    @property
+    def status(self) -> str:
+        return (
+            f"Scope     : {self._scope or 'NOT SET (tools locked)'}\n"
+            f"BG Tasks  : {len(self._active)} running\n"
+            f"Allowlist : {', '.join(sorted(self.ALLOWED))}"
+        )
+
+
 # ── Core Bot ──────────────────────────────────────────────────────────────────
 class MayaTermux:
     def __init__(self):
@@ -1013,13 +1197,12 @@ class MayaTermux:
         self.ai        = AIAnalyst(self.knowledge, self.web)
         self.paper     = PaperTrader(PAPER_BALANCE)
         self.monitor   = PriceMonitor(self.market)
-        self.learner   = LearningLoop(
-            self.market, self.knowledge, self.skills, self.web, self.ai.model
-        )
+        self.learner   = LearningLoop(self.market, self.knowledge, self.skills, self.web)
+        self.os_nexus  = OSNexus()
 
         print(
             f"\n{'='*60}\n"
-            f"  MAYA V12.0  |  EXCHANGE: {EXCHANGE_ID.upper()}\n"
+            f"  MAYA V13.0  |  EXCHANGE: {EXCHANGE_ID.upper()}\n"
             f"  BOSS: {BOSS_ID}\n"
             f"  PAPER BALANCE : {self.paper.balance():.2f} USDT\n"
             f"  KNOWLEDGE BASE: {self.knowledge.count()} entries\n"
@@ -1138,7 +1321,7 @@ class MayaTermux:
         task = " ".join(args)
         print(f"[EVOLUTION] Generating skill for: {task}")
         try:
-            name, desc = self.skills.create(self.ai.model, task)
+            name, desc = self.skills.create(None, task)
             return f"Skill created: {name}\nDescription : {desc}"
         except Exception as e:
             return f"Evolution failed: {e}"
@@ -1149,10 +1332,10 @@ class MayaTermux:
         target   = args[0]
         feedback = " ".join(args[1:]) if len(args) > 1 else ""
         if target == "all":
-            results = self.skills.upgrade_all(self.ai.model)
+            results = self.skills.upgrade_all()
             return "Self-Upgrade Results:\n" + "\n".join(results)
         try:
-            desc, ver = self.skills.upgrade(self.ai.model, target, feedback)
+            desc, ver = self.skills.upgrade(None, target, feedback)
             return f"Upgraded '{target}' to v{ver}\nDescription: {desc}"
         except Exception as e:
             return f"Upgrade failed: {e}"
@@ -1205,7 +1388,7 @@ class MayaTermux:
 
     def cmd_summarize(self, args):
         topic = " ".join(args) if args else "BTC"
-        return f"\n{self.knowledge.summarize(self.ai.model, topic)}"
+        return f"\n{self.knowledge.summarize(None, topic)}"
 
     # ── Learning Loop Commands ────────────────────────────────────────────────
 
@@ -1231,6 +1414,59 @@ class MayaTermux:
         if not rows:
             return "No intel logged yet."
         return "\n".join(f"  [{r['ts']}] {r['topic']}: {r['data'][:90]}..." for r in rows)
+
+    def cmd_os(self, args) -> str:
+        """Route all 'os' sub-commands to OSNexus."""
+        if not args:
+            return self.os_nexus.status
+        sub = args[0].lower()
+        rest = args[1:]
+
+        if sub == "declare":
+            if not rest:
+                return "Usage: os declare <target-ip/domain/CIDR>"
+            return self.os_nexus.declare_scope(" ".join(rest))
+
+        if sub == "clear":
+            return self.os_nexus.clear_scope()
+
+        if sub in ("exec", "run"):
+            if not rest:
+                return "Usage: os exec <tool> [args...]"
+            return self.os_nexus.run(" ".join(rest))
+
+        if sub == "bg":
+            if len(rest) < 2:
+                return "Usage: os bg <task-name> <tool> [args...]"
+            return self.os_nexus.run_bg(rest[0], " ".join(rest[1:]))
+
+        if sub == "tasks":
+            return self.os_nexus.list_tasks()
+
+        if sub == "kill":
+            if not rest:
+                return "Usage: os kill <task-name>"
+            return self.os_nexus.kill_task(rest[0])
+
+        if sub == "script":
+            if not rest:
+                return "Usage: os script <task description>"
+            return self.os_nexus.generate_script(" ".join(rest))
+
+        if sub == "status":
+            return self.os_nexus.status
+
+        return (
+            "OS sub-commands:\n"
+            "  os declare <target>         set authorized scope\n"
+            "  os clear                    clear scope (lock tools)\n"
+            "  os exec <tool> [args]       run allowlisted tool\n"
+            "  os bg <name> <tool> [args]  run tool in background\n"
+            "  os tasks                    list background tasks\n"
+            "  os kill <name>              stop background task\n"
+            "  os script <task>            generate pentest script (review only)\n"
+            "  os status                   show scope + allowlist"
+        )
 
     def cmd_webintel(self, args):
         """Fetch and display live global web intelligence snapshot."""
@@ -1280,6 +1516,14 @@ class MayaTermux:
 ━━ GLOBAL INTERNET ──────────────────────────────────────
   webintel [all|fear|market|movers|news|mempool]
                               live global crypto intel
+
+━━ OS NEXUS (AUTHORIZED PENTEST) ────────────────────────
+  os declare <target>         set authorized scope (required first)
+  os exec <tool> [args]       run allowlisted tool (nmap, sqlmap, etc.)
+  os bg <name> <tool> [args]  run tool in background
+  os tasks / kill <name>      manage background tasks
+  os script <description>     AI writes script → saved for review
+  os clear / status           manage scope
 
 ━━ MONITORING ───────────────────────────────────────────
   watch   <SYMBOL> [pct]      alert on ±pct% price move
@@ -1334,6 +1578,7 @@ class MayaTermux:
             "summarize": self.cmd_summarize,
             "autolearn": self.cmd_autolearn,
             "intel":     self.cmd_intel,
+            "os":        self.cmd_os,
             "webintel":  self.cmd_webintel,
             "help":      lambda _: self.HELP,
             "?":         lambda _: self.HELP,
