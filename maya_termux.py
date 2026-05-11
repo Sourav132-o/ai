@@ -1,13 +1,14 @@
 """
-MayaTermux V10.0 — AI-Powered Crypto Trading Intelligence
+MayaTermux V11.0 — Self-Upgrading AI Crypto Intelligence
 """
 import os
+import ast
 import time
 import sqlite3
 import threading
 import importlib.util
 import json
-from datetime import datetime, timezone
+import textwrap
 from typing import Optional
 
 import ccxt
@@ -15,137 +16,111 @@ import pandas as pd
 import google.generativeai as genai
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BOSS_ID       = os.environ.get("BOSS_ID", "SUPREME_BOSS_01")
+BOSS_ID        = os.environ.get("BOSS_ID", "SUPREME_BOSS_01")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-EXCHANGE_ID   = os.environ.get("EXCHANGE_ID", "binance")      # any ccxt exchange
-PAPER_BALANCE  = float(os.environ.get("PAPER_BALANCE", "10000"))  # USDT
+EXCHANGE_ID    = os.environ.get("EXCHANGE_ID", "binance")
+PAPER_BALANCE  = float(os.environ.get("PAPER_BALANCE", "10000"))
+LEARN_INTERVAL = int(os.environ.get("LEARN_INTERVAL_SEC", "3600"))  # auto-learn cycle
 
 if not GEMINI_API_KEY:
     raise EnvironmentError("Set GEMINI_API_KEY environment variable before running.")
 
 genai.configure(api_key=GEMINI_API_KEY)
+_DB = "maya_vault.db"
+
+
+# ── DB Helper ─────────────────────────────────────────────────────────────────
+def _db() -> sqlite3.Connection:
+    conn = sqlite3.connect(_DB, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_db():
+    conn = _db()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS intel (
+            id INTEGER PRIMARY KEY,
+            topic TEXT, data TEXT, ts TEXT
+        );
+        CREATE TABLE IF NOT EXISTS skills (
+            id INTEGER PRIMARY KEY,
+            name TEXT UNIQUE,
+            task TEXT,
+            description TEXT,
+            version INTEGER DEFAULT 1,
+            path TEXT,
+            usage_count INTEGER DEFAULT 0,
+            success_count INTEGER DEFAULT 0,
+            last_error TEXT,
+            ts TEXT
+        );
+        CREATE TABLE IF NOT EXISTS skill_versions (
+            id INTEGER PRIMARY KEY,
+            name TEXT, version INTEGER, path TEXT, ts TEXT
+        );
+        CREATE TABLE IF NOT EXISTS knowledge (
+            id INTEGER PRIMARY KEY,
+            topic TEXT, tags TEXT, insight TEXT, ts TEXT
+        );
+        CREATE TABLE IF NOT EXISTS paper_account (
+            id INTEGER PRIMARY KEY, usdt_balance REAL, ts TEXT
+        );
+        CREATE TABLE IF NOT EXISTS paper_trades (
+            id INTEGER PRIMARY KEY,
+            symbol TEXT, side TEXT, amount REAL,
+            price REAL, pnl REAL, ts TEXT
+        );
+    """)
+    conn.commit()
+    conn.close()
 
 
 # ── Technical Indicators ──────────────────────────────────────────────────────
 class Indicators:
     @staticmethod
-    def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-        delta = series.diff()
-        gain  = delta.clip(lower=0).rolling(period).mean()
-        loss  = (-delta.clip(upper=0)).rolling(period).mean()
-        rs    = gain / loss.replace(0, float("nan"))
-        return 100 - (100 / (1 + rs))
+    def rsi(s: pd.Series, p: int = 14) -> pd.Series:
+        d = s.diff()
+        g = d.clip(lower=0).rolling(p).mean()
+        l = (-d.clip(upper=0)).rolling(p).mean()
+        return 100 - (100 / (1 + g / l.replace(0, float("nan"))))
 
     @staticmethod
-    def macd(series: pd.Series, fast=12, slow=26, signal=9):
-        ema_fast   = series.ewm(span=fast, adjust=False).mean()
-        ema_slow   = series.ewm(span=slow, adjust=False).mean()
-        macd_line  = ema_fast - ema_slow
-        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-        histogram  = macd_line - signal_line
-        return macd_line, signal_line, histogram
+    def macd(s: pd.Series, fast=12, slow=26, sig=9):
+        m = s.ewm(span=fast, adjust=False).mean() - s.ewm(span=slow, adjust=False).mean()
+        sl = m.ewm(span=sig, adjust=False).mean()
+        return m, sl, m - sl
 
     @staticmethod
-    def bollinger(series: pd.Series, period=20, std_dev=2):
-        sma   = series.rolling(period).mean()
-        std   = series.rolling(period).std()
-        upper = sma + std_dev * std
-        lower = sma - std_dev * std
-        return upper, sma, lower
+    def bollinger(s: pd.Series, p=20, k=2):
+        sma = s.rolling(p).mean()
+        std = s.rolling(p).std()
+        return sma + k * std, sma, sma - k * std
 
     @staticmethod
-    def ema(series: pd.Series, period: int) -> pd.Series:
-        return series.ewm(span=period, adjust=False).mean()
+    def ema(s: pd.Series, p: int) -> pd.Series:
+        return s.ewm(span=p, adjust=False).mean()
 
     @staticmethod
-    def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        high_low   = df["high"] - df["low"]
-        high_close = (df["high"] - df["close"].shift()).abs()
-        low_close  = (df["low"]  - df["close"].shift()).abs()
-        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-        return tr.rolling(period).mean()
+    def atr(df: pd.DataFrame, p: int = 14) -> pd.Series:
+        tr = pd.concat([
+            df["high"] - df["low"],
+            (df["high"] - df["close"].shift()).abs(),
+            (df["low"]  - df["close"].shift()).abs(),
+        ], axis=1).max(axis=1)
+        return tr.rolling(p).mean()
 
+    @staticmethod
+    def stoch_rsi(s: pd.Series, p=14) -> pd.Series:
+        rsi = Indicators.rsi(s, p)
+        min_r = rsi.rolling(p).min()
+        max_r = rsi.rolling(p).max()
+        return (rsi - min_r) / (max_r - min_r).replace(0, float("nan"))
 
-# ── Paper Trading Engine ──────────────────────────────────────────────────────
-class PaperTrader:
-    def __init__(self, db_path: str, initial_balance: float):
-        self.db_path = db_path
-        self._init(initial_balance)
-
-    def _init(self, initial_balance: float):
-        conn = sqlite3.connect(self.db_path)
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS paper_account (
-                id INTEGER PRIMARY KEY,
-                usdt_balance REAL,
-                ts TEXT
-            );
-            CREATE TABLE IF NOT EXISTS paper_trades (
-                id INTEGER PRIMARY KEY,
-                symbol TEXT,
-                side TEXT,
-                amount REAL,
-                price REAL,
-                pnl REAL,
-                ts TEXT
-            );
-        """)
-        # Seed balance only once
-        if not conn.execute("SELECT 1 FROM paper_account LIMIT 1").fetchone():
-            conn.execute(
-                "INSERT INTO paper_account (usdt_balance, ts) VALUES (?, datetime('now'))",
-                (initial_balance,),
-            )
-        conn.commit()
-        conn.close()
-
-    def balance(self) -> float:
-        conn = sqlite3.connect(self.db_path)
-        row = conn.execute("SELECT usdt_balance FROM paper_account ORDER BY id DESC LIMIT 1").fetchone()
-        conn.close()
-        return row[0] if row else 0.0
-
-    def trade(self, symbol: str, side: str, usdt_amount: float, price: float) -> str:
-        bal = self.balance()
-        if side == "BUY":
-            if usdt_amount > bal:
-                return f"Insufficient paper balance ({bal:.2f} USDT)"
-            new_bal = bal - usdt_amount
-            coin_amount = usdt_amount / price
-            pnl = 0.0
-            msg = f"BUY {coin_amount:.6f} {symbol} @ {price:.2f} | Cost: {usdt_amount:.2f} USDT"
-        elif side == "SELL":
-            coin_amount = usdt_amount / price
-            pnl = usdt_amount - usdt_amount  # flat for now; real PnL needs position tracking
-            new_bal = bal + usdt_amount
-            msg = f"SELL {coin_amount:.6f} {symbol} @ {price:.2f} | Received: {usdt_amount:.2f} USDT"
-        else:
-            return "Invalid side. Use BUY or SELL."
-
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            "INSERT INTO paper_account (usdt_balance, ts) VALUES (?, datetime('now'))",
-            (new_bal,),
-        )
-        conn.execute(
-            "INSERT INTO paper_trades (symbol, side, amount, price, pnl, ts) VALUES (?,?,?,?,?,datetime('now'))",
-            (symbol, side, coin_amount, price, pnl),
-        )
-        conn.commit()
-        conn.close()
-        return f"[PAPER TRADE] {msg} | New Balance: {new_bal:.2f} USDT"
-
-    def history(self, limit: int = 10) -> str:
-        conn = sqlite3.connect(self.db_path)
-        rows = conn.execute(
-            "SELECT symbol, side, amount, price, ts FROM paper_trades ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        conn.close()
-        if not rows:
-            return "No paper trades yet."
-        lines = [f"  {r[4]} | {r[1]:4} {r[2]:.6f} {r[0]} @ {r[3]:.2f}" for r in rows]
-        return "\n".join(lines)
+    @staticmethod
+    def vwap(df: pd.DataFrame) -> pd.Series:
+        tp = (df["high"] + df["low"] + df["close"]) / 3
+        return (tp * df["vol"]).cumsum() / df["vol"].cumsum()
 
 
 # ── Market Engine ─────────────────────────────────────────────────────────────
@@ -163,76 +138,391 @@ class MarketEngine:
         return self.exchange.fetch_ticker(symbol)
 
     def full_analysis(self, symbol: str, timeframe: str = "1h") -> dict:
-        df = self.ohlcv(symbol, timeframe, limit=100)
+        df    = self.ohlcv(symbol, timeframe, limit=100)
         close = df["close"]
 
-        rsi_val   = Indicators.rsi(close).iloc[-1]
-        macd_line, sig_line, hist = Indicators.macd(close)
-        bb_upper, bb_mid, bb_lower = Indicators.bollinger(close)
-        atr_val   = Indicators.atr(df).iloc[-1]
-        ema9      = Indicators.ema(close, 9).iloc[-1]
-        ema21     = Indicators.ema(close, 21).iloc[-1]
-        price     = close.iloc[-1]
+        rsi_v           = Indicators.rsi(close).iloc[-1]
+        _, _, hist      = Indicators.macd(close)
+        bb_u, bb_m, bb_l = Indicators.bollinger(close)
+        atr_v           = Indicators.atr(df).iloc[-1]
+        ema9            = Indicators.ema(close, 9).iloc[-1]
+        ema21           = Indicators.ema(close, 21).iloc[-1]
+        ema50           = Indicators.ema(close, 50).iloc[-1]
+        srsi            = Indicators.stoch_rsi(close).iloc[-1]
+        vwap_v          = Indicators.vwap(df).iloc[-1]
+        price           = close.iloc[-1]
+        vol_avg         = df["vol"].rolling(20).mean().iloc[-1]
+        vol_ratio       = df["vol"].iloc[-1] / vol_avg if vol_avg else 1.0
 
-        # Simple signal score (-1 to +1 scale)
-        signals = []
-        signals.append(1  if rsi_val < 30 else (-1 if rsi_val > 70 else 0))
-        signals.append(1  if hist.iloc[-1] > 0 else -1)
-        signals.append(1  if ema9 > ema21 else -1)
-        signals.append(1  if price > bb_mid.iloc[-1] else -1)
+        signals = [
+            1  if rsi_v < 30  else (-1 if rsi_v > 70  else 0),
+            1  if hist.iloc[-1] > 0 else -1,
+            1  if ema9 > ema21 else -1,
+            1  if ema21 > ema50 else -1,
+            1  if price > bb_m.iloc[-1] else -1,
+            1  if price > vwap_v else -1,
+            1  if srsi < 0.2   else (-1 if srsi > 0.8 else 0),
+        ]
         score = sum(signals) / len(signals)
 
         return {
             "symbol":    symbol,
             "timeframe": timeframe,
             "price":     round(price, 4),
-            "rsi":       round(rsi_val, 2),
+            "rsi":       round(rsi_v, 2),
+            "stoch_rsi": round(float(srsi), 3) if srsi == srsi else None,
             "macd_hist": round(hist.iloc[-1], 4),
             "ema9":      round(ema9, 4),
             "ema21":     round(ema21, 4),
-            "bb_upper":  round(bb_upper.iloc[-1], 4),
-            "bb_lower":  round(bb_lower.iloc[-1], 4),
-            "atr":       round(atr_val, 4),
+            "ema50":     round(ema50, 4),
+            "vwap":      round(vwap_v, 4),
+            "bb_upper":  round(bb_u.iloc[-1], 4),
+            "bb_lower":  round(bb_l.iloc[-1], 4),
+            "atr":       round(atr_v, 4),
+            "vol_ratio": round(vol_ratio, 2),
             "score":     round(score, 2),
-            "signal":    "STRONG BUY" if score >= 0.75 else
-                         "BUY"        if score >= 0.25 else
-                         "SELL"       if score <= -0.25 else
-                         "STRONG SELL" if score <= -0.75 else "NEUTRAL",
+            "signal":    ("STRONG BUY"  if score >= 0.7 else
+                          "BUY"         if score >= 0.3 else
+                          "STRONG SELL" if score <= -0.7 else
+                          "SELL"        if score <= -0.3 else "NEUTRAL"),
         }
 
 
-# ── AI Analyst ───────────────────────────────────────────────────────────────
-class AIAnalyst:
+# ── Knowledge Base ────────────────────────────────────────────────────────────
+class KnowledgeBase:
+    """Persistent memory of market insights, trade lessons and AI conclusions."""
+
+    def store(self, topic: str, insight: str, tags: str = ""):
+        conn = _db()
+        conn.execute(
+            "INSERT INTO knowledge (topic, tags, insight, ts) VALUES (?,?,?,datetime('now'))",
+            (topic, tags, insight),
+        )
+        conn.commit()
+        conn.close()
+
+    def recall(self, topic: str, limit: int = 5) -> list[str]:
+        conn = _db()
+        rows = conn.execute(
+            """SELECT insight FROM knowledge
+               WHERE topic LIKE ? OR tags LIKE ? OR insight LIKE ?
+               ORDER BY id DESC LIMIT ?""",
+            (f"%{topic}%", f"%{topic}%", f"%{topic}%", limit),
+        ).fetchall()
+        conn.close()
+        return [r["insight"] for r in rows]
+
+    def summarize(self, model, topic: str) -> str:
+        entries = self.recall(topic, limit=20)
+        if not entries:
+            return f"No knowledge stored about '{topic}' yet."
+        joined = "\n".join(f"- {e}" for e in entries)
+        prompt = (
+            f"Summarize these market observations about {topic} into 3 key actionable insights:\n"
+            f"{joined}"
+        )
+        return model.generate_content(prompt).text.strip()
+
+    def count(self) -> int:
+        conn = _db()
+        n = conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0]
+        conn.close()
+        return n
+
+
+# ── Skill Registry ────────────────────────────────────────────────────────────
+class SkillRegistry:
+    """
+    Full lifecycle for AI-generated skills:
+    create → persist → hot-load → track usage → upgrade → version history
+    """
+
+    SKILLS_DIR = "skills"
+
     def __init__(self):
-        self.model = genai.GenerativeModel("gemini-1.5-pro")
-        self.chat  = self.model.start_chat(history=[])
+        self._loaded: dict[str, object] = {}
+        os.makedirs(self.SKILLS_DIR, exist_ok=True)
+        self._restore_from_db()
+
+    # ── persistence ──────────────────────────────────────────────────────────
+
+    def _restore_from_db(self):
+        conn = _db()
+        rows = conn.execute("SELECT name, path FROM skills").fetchall()
+        conn.close()
+        restored = 0
+        for row in rows:
+            try:
+                self._hot_load(row["name"], row["path"])
+                restored += 1
+            except Exception:
+                pass
+        if restored:
+            print(f"[SKILLS] Restored {restored} skill(s) from vault.")
+
+    def _save_to_db(self, name: str, task: str, description: str, path: str, version: int):
+        conn = _db()
+        conn.execute(
+            """INSERT INTO skills (name, task, description, version, path, ts)
+               VALUES (?,?,?,?,?,datetime('now'))
+               ON CONFLICT(name) DO UPDATE SET
+                 task=excluded.task, description=excluded.description,
+                 version=excluded.version, path=excluded.path, ts=excluded.ts""",
+            (name, task, description, version, path),
+        )
+        conn.execute(
+            "INSERT INTO skill_versions (name, version, path, ts) VALUES (?,?,?,datetime('now'))",
+            (name, version, path),
+        )
+        conn.commit()
+        conn.close()
+
+    def _hot_load(self, name: str, path: str) -> object:
+        spec   = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        instance = module.Skill()
+        self._loaded[name] = instance
+        return instance
+
+    # ── code helpers ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _clean_code(raw: str) -> str:
+        code = raw.strip()
+        if code.startswith("```"):
+            code = "\n".join(code.splitlines()[1:])
+        if "```" in code:
+            code = code[:code.rindex("```")]
+        return code.strip()
+
+    @staticmethod
+    def _validate_syntax(code: str) -> tuple[bool, str]:
+        try:
+            ast.parse(code)
+            return True, ""
+        except SyntaxError as e:
+            return False, str(e)
+
+    def _write_skill(self, name: str, code: str) -> str:
+        path = os.path.join(self.SKILLS_DIR, f"{name}.py")
+        with open(path, "w") as f:
+            f.write(code)
+        return path
+
+    # ── public API ───────────────────────────────────────────────────────────
+
+    def create(self, model, task: str, name: Optional[str] = None) -> tuple[str, str]:
+        """Generate, validate, persist and hot-load a new skill. Returns (name, description)."""
+        prompt = textwrap.dedent(f"""
+            Write a Python class named 'Skill' with ONE method:
+                def execute(self, **kwargs) -> str
+
+            Task: {task}
+
+            Rules:
+            - Handle ALL exceptions internally; never raise to caller
+            - Return a plain string result
+            - No external dependencies beyond stdlib
+            - Include a one-line class docstring describing what it does
+
+            Return ONLY valid Python code. No markdown fences.
+        """)
+        raw  = model.generate_content(prompt).text
+        code = self._clean_code(raw)
+
+        ok, err = self._validate_syntax(code)
+        if not ok:
+            # Ask Gemini to fix it
+            fix_prompt = f"Fix this Python syntax error: {err}\n\nCode:\n{code}\n\nReturn ONLY fixed code."
+            code = self._clean_code(model.generate_content(fix_prompt).text)
+            ok, err = self._validate_syntax(code)
+            if not ok:
+                raise ValueError(f"Syntax error after repair attempt: {err}")
+
+        skill_name = name or f"skill_{int(time.time())}"
+        path       = self._write_skill(skill_name, code)
+        instance   = self._hot_load(skill_name, path)
+        desc       = (instance.__class__.__doc__ or task)[:120].strip()
+        self._save_to_db(skill_name, task, desc, path, version=1)
+        return skill_name, desc
+
+    def upgrade(self, model, name: str, feedback: str = "") -> tuple[str, int]:
+        """
+        Read existing skill code, ask Gemini to improve it, hot-swap in place.
+        Returns (description, new_version).
+        """
+        conn = _db()
+        row  = conn.execute("SELECT task, path, version FROM skills WHERE name=?", (name,)).fetchone()
+        conn.close()
+        if not row:
+            raise KeyError(f"Skill '{name}' not found in registry.")
+
+        with open(row["path"]) as f:
+            current_code = f.read()
+
+        prompt = textwrap.dedent(f"""
+            You are improving an existing Python skill class.
+
+            Original task: {row['task']}
+            User feedback / reason for upgrade: {feedback or 'General improvement: better error handling, efficiency, and output quality.'}
+
+            Current code:
+            ```python
+            {current_code}
+            ```
+
+            Rewrite the class with these improvements:
+            - Better error handling
+            - More informative return strings
+            - Efficiency improvements if applicable
+            - Fix any bugs evident from the code
+
+            Keep class name 'Skill' and method signature 'execute(self, **kwargs) -> str'.
+            Return ONLY valid Python code. No markdown fences.
+        """)
+        raw  = model.generate_content(prompt).text
+        code = self._clean_code(raw)
+        ok, err = self._validate_syntax(code)
+        if not ok:
+            raise ValueError(f"Upgraded code has syntax error: {err}")
+
+        new_version = row["version"] + 1
+        path        = self._write_skill(name, code)
+        instance    = self._hot_load(name, path)
+        desc        = (instance.__class__.__doc__ or row["task"])[:120].strip()
+        self._save_to_db(name, row["task"], desc, path, new_version)
+        return desc, new_version
+
+    def upgrade_all(self, model) -> list[str]:
+        """Upgrade every registered skill. Returns list of results."""
+        conn = _db()
+        rows = conn.execute("SELECT name FROM skills").fetchall()
+        conn.close()
+        results = []
+        for row in rows:
+            try:
+                _, ver = self.upgrade(model, row["name"])
+                results.append(f"  ✓ {row['name']} → v{ver}")
+            except Exception as e:
+                results.append(f"  ✗ {row['name']}: {e}")
+        return results
+
+    def execute(self, name: str, **kwargs) -> str:
+        if name not in self._loaded:
+            raise KeyError(f"Skill '{name}' not loaded.")
+        conn = _db()
+        try:
+            result = str(self._loaded[name].execute(**kwargs))
+            conn.execute(
+                "UPDATE skills SET usage_count=usage_count+1, success_count=success_count+1 WHERE name=?",
+                (name,),
+            )
+            conn.commit()
+            return result
+        except Exception as e:
+            conn.execute(
+                "UPDATE skills SET usage_count=usage_count+1, last_error=? WHERE name=?",
+                (str(e), name),
+            )
+            conn.commit()
+            raise
+        finally:
+            conn.close()
+
+    def info(self, name: str) -> str:
+        conn = _db()
+        row  = conn.execute("SELECT * FROM skills WHERE name=?", (name,)).fetchone()
+        conn.close()
+        if not row:
+            return f"Skill '{name}' not found."
+        sr = f"{row['success_count']}/{row['usage_count']}" if row["usage_count"] else "never run"
+        return (
+            f"  Name       : {row['name']}\n"
+            f"  Version    : v{row['version']}\n"
+            f"  Task       : {row['task']}\n"
+            f"  Description: {row['description']}\n"
+            f"  Success    : {sr}\n"
+            f"  Last error : {row['last_error'] or 'none'}\n"
+            f"  Created    : {row['ts']}"
+        )
+
+    def list_all(self) -> str:
+        if not self._loaded:
+            return "No skills loaded. Use 'evolve <task>'."
+        conn = _db()
+        rows = conn.execute(
+            "SELECT name, version, usage_count, success_count, description FROM skills"
+        ).fetchall()
+        conn.close()
+        lines = []
+        for r in rows:
+            status = "●" if r["name"] in self._loaded else "○"
+            sr = f"{r['success_count']}/{r['usage_count']}" if r["usage_count"] else "0/0"
+            lines.append(f"  {status} {r['name']:30} v{r['version']}  [{sr}]  {r['description'][:40]}")
+        return "\n".join(lines)
+
+    def version_history(self, name: str) -> str:
+        conn = _db()
+        rows = conn.execute(
+            "SELECT version, path, ts FROM skill_versions WHERE name=? ORDER BY version",
+            (name,),
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return f"No version history for '{name}'."
+        return "\n".join(f"  v{r['version']}  {r['ts']}  {r['path']}" for r in rows)
+
+    @property
+    def names(self) -> list[str]:
+        return list(self._loaded.keys())
+
+
+# ── AI Analyst ────────────────────────────────────────────────────────────────
+class AIAnalyst:
+    def __init__(self, knowledge: KnowledgeBase):
+        self.model     = genai.GenerativeModel("gemini-1.5-pro")
+        self.chat      = self.model.start_chat(history=[])
+        self.knowledge = knowledge
 
     def analyze(self, data: dict) -> str:
+        context = self.knowledge.recall(data["symbol"], limit=3)
+        ctx_block = ""
+        if context:
+            ctx_block = "\nPast observations:\n" + "\n".join(f"- {c}" for c in context) + "\n"
+
         prompt = (
-            f"You are a senior crypto quant analyst. Given this market snapshot:\n"
-            f"{json.dumps(data, indent=2)}\n\n"
-            f"Give a concise 3-paragraph analysis:\n"
-            f"1. Current market condition & momentum\n"
-            f"2. Key risk factors and support/resistance zones based on indicators\n"
-            f"3. Actionable recommendation with stop-loss and take-profit levels.\n"
-            f"Be specific and data-driven. No fluff."
+            f"You are a senior crypto quant analyst.\n"
+            f"{ctx_block}\n"
+            f"Current market snapshot:\n{json.dumps(data, indent=2)}\n\n"
+            f"Provide a structured analysis:\n"
+            f"1. Market condition & momentum (cite specific indicator values)\n"
+            f"2. Key risk factors, support/resistance from BB + EMA + VWAP\n"
+            f"3. Concrete trade recommendation with entry, stop-loss, take-profit\n"
+            f"4. Confidence score 0-100 based on signal alignment\n"
+            f"Be specific. No generic statements."
         )
-        response = self.chat.send_message(prompt)
-        return response.text.strip()
+        result = self.chat.send_message(prompt).text.strip()
+        self.knowledge.store(
+            topic=data["symbol"],
+            insight=f"[{data['timeframe']}] price={data['price']} signal={data['signal']} score={data['score']}",
+            tags=f"{data['symbol']},analysis",
+        )
+        return result
 
     def ask(self, question: str) -> str:
-        response = self.chat.send_message(question)
-        return response.text.strip()
+        return self.chat.send_message(question).text.strip()
 
-    def generate_skill(self, task: str) -> str:
-        prompt = (
-            f"Write a Python class named 'Skill' with a single method 'execute(self, **kwargs) -> str' "
-            f"that accomplishes: {task}\n"
-            f"Requirements: handle exceptions, return a string result.\n"
-            f"Return ONLY valid Python code. No markdown fences."
-        )
-        response = self.model.generate_content(prompt)
-        code = response.text.strip()
+    def generate_skill_code(self, task: str) -> str:
+        prompt = textwrap.dedent(f"""
+            Write a Python class named 'Skill' with method 'execute(self, **kwargs) -> str'.
+            Task: {task}
+            Rules: handle all exceptions, return a plain string, no external deps beyond stdlib.
+            Include a one-line class docstring.
+            Return ONLY valid Python code. No markdown fences.
+        """)
+        raw  = self.model.generate_content(prompt).text
+        code = raw.strip()
         if code.startswith("```"):
             code = "\n".join(code.splitlines()[1:])
         if "```" in code:
@@ -240,307 +530,500 @@ class AIAnalyst:
         return code.strip()
 
 
-# ── Background Monitor ────────────────────────────────────────────────────────
-class Monitor:
-    def __init__(self, market: MarketEngine, db_path: str):
-        self.market   = market
-        self.db_path  = db_path
-        self._active  = False
-        self._watches: dict[str, float] = {}  # symbol -> alert threshold
-        self._thread: Optional[threading.Thread] = None
+# ── Paper Trader ──────────────────────────────────────────────────────────────
+class PaperTrader:
+    def __init__(self, initial_balance: float):
+        conn = _db()
+        if not conn.execute("SELECT 1 FROM paper_account LIMIT 1").fetchone():
+            conn.execute(
+                "INSERT INTO paper_account (usdt_balance, ts) VALUES (?, datetime('now'))",
+                (initial_balance,),
+            )
+            conn.commit()
+        conn.close()
 
-    def watch(self, symbol: str, pct_change: float = 3.0):
-        self._watches[symbol] = pct_change
-        if not self._active:
-            self._active = True
-            self._thread = threading.Thread(target=self._loop, daemon=True)
-            self._thread.start()
-            print(f"[MONITOR] Background monitor started.")
-        print(f"[MONITOR] Watching {symbol} (alert at ±{pct_change}% move)")
+    def balance(self) -> float:
+        conn = _db()
+        row  = conn.execute("SELECT usdt_balance FROM paper_account ORDER BY id DESC LIMIT 1").fetchone()
+        conn.close()
+        return row[0] if row else 0.0
 
-    def unwatch(self, symbol: str):
-        self._watches.pop(symbol, None)
-        if not self._watches:
-            self._active = False
-        print(f"[MONITOR] Stopped watching {symbol}")
+    def trade(self, symbol: str, side: str, usdt_amount: float, price: float) -> str:
+        bal = self.balance()
+        if side == "BUY":
+            if usdt_amount > bal:
+                return f"Insufficient paper balance ({bal:.2f} USDT)"
+            new_bal    = bal - usdt_amount
+            coin_qty   = usdt_amount / price
+            msg        = f"BUY {coin_qty:.6f} {symbol} @ {price:.4f} | Cost {usdt_amount:.2f} USDT"
+        elif side == "SELL":
+            coin_qty   = usdt_amount / price
+            new_bal    = bal + usdt_amount
+            msg        = f"SELL {coin_qty:.6f} {symbol} @ {price:.4f} | Received {usdt_amount:.2f} USDT"
+        else:
+            return "Invalid side. Use BUY or SELL."
 
-    def _log(self, msg: str):
-        conn = sqlite3.connect(self.db_path)
+        conn = _db()
         conn.execute(
-            "INSERT INTO intel (topic, data, ts) VALUES (?, ?, datetime('now'))",
-            ("monitor_alert", msg),
+            "INSERT INTO paper_account (usdt_balance, ts) VALUES (?, datetime('now'))",
+            (new_bal,),
+        )
+        conn.execute(
+            "INSERT INTO paper_trades (symbol, side, amount, price, pnl, ts) VALUES (?,?,?,?,0,datetime('now'))",
+            (symbol, side, coin_qty, price),
         )
         conn.commit()
         conn.close()
-        print(f"\n*** [ALERT] {msg} ***")
+        return f"[PAPER] {msg} | Balance: {new_bal:.2f} USDT"
+
+    def history(self, limit: int = 10) -> str:
+        conn  = _db()
+        rows  = conn.execute(
+            "SELECT symbol, side, amount, price, ts FROM paper_trades ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return "No paper trades yet."
+        return "\n".join(
+            f"  {r['ts']} | {r['side']:4} {r['amount']:.6f} {r['symbol']} @ {r['price']:.4f}"
+            for r in rows
+        )
+
+
+# ── Background Monitor ────────────────────────────────────────────────────────
+class PriceMonitor:
+    def __init__(self, market: MarketEngine):
+        self.market   = market
+        self._watches: dict[str, float] = {}
+        self._active  = False
+        self._prev:   dict[str, float] = {}
+
+    def watch(self, symbol: str, pct: float = 3.0):
+        self._watches[symbol] = pct
+        if not self._active:
+            self._active = True
+            threading.Thread(target=self._loop, daemon=True).start()
+            print("[MONITOR] Price monitor started.")
+        print(f"[MONITOR] Watching {symbol} (±{pct}%)")
+
+    def unwatch(self, symbol: str):
+        self._watches.pop(symbol, None)
 
     def _loop(self):
-        prev_prices: dict[str, float] = {}
         while self._active:
-            for symbol, threshold in list(self._watches.items()):
+            for sym, threshold in list(self._watches.items()):
                 try:
-                    t = self.market.ticker(symbol)
-                    price = t["last"]
-                    if symbol in prev_prices:
-                        pct = abs(price - prev_prices[symbol]) / prev_prices[symbol] * 100
+                    price = self.market.ticker(sym)["last"]
+                    if sym in self._prev:
+                        pct = abs(price - self._prev[sym]) / self._prev[sym] * 100
                         if pct >= threshold:
-                            self._log(f"{symbol} moved {pct:.2f}% to {price:.4f}")
-                    prev_prices[symbol] = price
+                            msg = f"[ALERT] {sym} moved {pct:.2f}% → {price:.4f}"
+                            print(f"\n*** {msg} ***")
+                            conn = _db()
+                            conn.execute(
+                                "INSERT INTO intel (topic,data,ts) VALUES ('alert',?,datetime('now'))",
+                                (msg,),
+                            )
+                            conn.commit()
+                            conn.close()
+                    self._prev[sym] = price
                 except Exception:
                     pass
             time.sleep(60)
 
 
+# ── Auto-Learning Loop ────────────────────────────────────────────────────────
+class LearningLoop:
+    """
+    Background thread that periodically:
+    1. Scans key markets and stores insights in KnowledgeBase
+    2. Reviews skill success rates and auto-upgrades weak performers
+    3. Logs a learning summary to intel
+    """
+
+    WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+
+    def __init__(self, market: MarketEngine, knowledge: KnowledgeBase,
+                 skills: SkillRegistry, model):
+        self.market    = market
+        self.knowledge = knowledge
+        self.skills    = skills
+        self.model     = model
+        self._active   = False
+        self._thread: Optional[threading.Thread] = None
+        self.cycles    = 0
+
+    def start(self):
+        if self._active:
+            return "Auto-learn already running."
+        self._active = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        return f"Auto-learn started (cycle every {LEARN_INTERVAL}s)."
+
+    def stop(self):
+        self._active = False
+        return "Auto-learn stopped."
+
+    def run_once(self) -> str:
+        """Run a single learning cycle synchronously."""
+        return self._cycle()
+
+    def _cycle(self) -> str:
+        self.cycles += 1
+        log = [f"[LEARN] Cycle #{self.cycles}"]
+
+        # 1. Market scans → knowledge base
+        for sym in self.WATCHLIST:
+            try:
+                data = self.market.full_analysis(sym)
+                insight = (
+                    f"price={data['price']} rsi={data['rsi']} "
+                    f"signal={data['signal']} score={data['score']} vol_ratio={data['vol_ratio']}"
+                )
+                self.knowledge.store(sym, insight, tags=f"{sym},auto")
+                log.append(f"  Stored insight: {sym} → {data['signal']}")
+            except Exception as e:
+                log.append(f"  Scan error {sym}: {e}")
+
+        # 2. Auto-upgrade skills with low success rates
+        conn = _db()
+        weak = conn.execute(
+            """SELECT name FROM skills
+               WHERE usage_count >= 3
+               AND CAST(success_count AS REAL)/usage_count < 0.6""",
+        ).fetchall()
+        conn.close()
+        for row in weak:
+            try:
+                _, ver = self.skills.upgrade(self.model, row["name"], "Low success rate — improve robustness")
+                log.append(f"  Auto-upgraded: {row['name']} → v{ver}")
+            except Exception as e:
+                log.append(f"  Upgrade failed {row['name']}: {e}")
+
+        summary = "\n".join(log)
+        conn = _db()
+        conn.execute(
+            "INSERT INTO intel (topic,data,ts) VALUES ('learn_cycle',?,datetime('now'))",
+            (summary,),
+        )
+        conn.commit()
+        conn.close()
+        print(f"\n{summary}")
+        return summary
+
+    def _loop(self):
+        while self._active:
+            try:
+                self._cycle()
+            except Exception as e:
+                print(f"[LEARN-ERROR] {e}")
+            time.sleep(LEARN_INTERVAL)
+
+    @property
+    def status(self) -> str:
+        state = "RUNNING" if self._active else "STOPPED"
+        return f"Auto-learn: {state} | Cycles completed: {self.cycles} | Interval: {LEARN_INTERVAL}s"
+
+
 # ── Core Bot ──────────────────────────────────────────────────────────────────
 class MayaTermux:
     def __init__(self):
-        self.db_path = "maya_vault.db"
-        self._init_db()
+        _init_db()
         self.market   = MarketEngine(EXCHANGE_ID)
-        self.paper    = PaperTrader(self.db_path, PAPER_BALANCE)
-        self.ai       = AIAnalyst()
-        self.monitor  = Monitor(self.market, self.db_path)
-        self._skills: dict[str, object] = {}
+        self.knowledge = KnowledgeBase()
+        self.skills   = SkillRegistry()
+        self.ai       = AIAnalyst(self.knowledge)
+        self.paper    = PaperTrader(PAPER_BALANCE)
+        self.monitor  = PriceMonitor(self.market)
+        self.learner  = LearningLoop(self.market, self.knowledge, self.skills, self.ai.model)
 
         print(
-            f"\n{'='*55}\n"
-            f"  MAYA V10.0  |  EXCHANGE: {EXCHANGE_ID.upper()}\n"
-            f"  BOSS: {BOSS_ID}  |  PAPER BALANCE: {self.paper.balance():.2f} USDT\n"
-            f"{'='*55}\n"
+            f"\n{'='*60}\n"
+            f"  MAYA V11.0  |  EXCHANGE: {EXCHANGE_ID.upper()}\n"
+            f"  BOSS: {BOSS_ID}\n"
+            f"  PAPER BALANCE : {self.paper.balance():.2f} USDT\n"
+            f"  KNOWLEDGE BASE: {self.knowledge.count()} entries\n"
+            f"  SKILLS LOADED : {len(self.skills.names)}\n"
+            f"{'='*60}\n"
             f"  Type 'help' for commands.\n"
         )
 
-    def _init_db(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS intel (id INTEGER PRIMARY KEY, topic TEXT, data TEXT, ts TEXT);
-            CREATE TABLE IF NOT EXISTS skills (id INTEGER PRIMARY KEY, name TEXT, path TEXT, ts TEXT);
-        """)
-        conn.commit()
-        conn.close()
+    # ── Command Handlers ──────────────────────────────────────────────────────
 
-    def _log(self, topic: str, data: str):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            "INSERT INTO intel (topic, data, ts) VALUES (?, ?, datetime('now'))",
-            (topic, data),
-        )
-        conn.commit()
-        conn.close()
-
-    # ── Commands ──────────────────────────────────────────────────────────────
-
-    def cmd_scan(self, args: list[str]) -> str:
+    def cmd_scan(self, args):
         symbol    = args[0].upper() if args else "BTC/USDT"
         timeframe = args[1] if len(args) > 1 else "1h"
         try:
-            data = self.market.full_analysis(symbol, timeframe)
-            self._log("scan", json.dumps(data))
+            d = self.market.full_analysis(symbol, timeframe)
+            conn = _db()
+            conn.execute(
+                "INSERT INTO intel (topic,data,ts) VALUES ('scan',?,datetime('now'))",
+                (json.dumps(d),),
+            )
+            conn.commit()
+            conn.close()
             return (
-                f"\n  Symbol   : {data['symbol']} ({data['timeframe']})\n"
-                f"  Price    : {data['price']}\n"
-                f"  RSI      : {data['rsi']}\n"
-                f"  MACD Hist: {data['macd_hist']}\n"
-                f"  EMA 9/21 : {data['ema9']} / {data['ema21']}\n"
-                f"  BB       : {data['bb_lower']} — {data['bb_upper']}\n"
-                f"  ATR      : {data['atr']}\n"
-                f"  Score    : {data['score']}  →  {data['signal']}"
+                f"\n  {d['symbol']} ({d['timeframe']})\n"
+                f"  {'─'*40}\n"
+                f"  Price      : {d['price']}\n"
+                f"  RSI        : {d['rsi']}  |  StochRSI: {d['stoch_rsi']}\n"
+                f"  MACD Hist  : {d['macd_hist']}\n"
+                f"  EMA 9/21/50: {d['ema9']} / {d['ema21']} / {d['ema50']}\n"
+                f"  VWAP       : {d['vwap']}\n"
+                f"  BB         : {d['bb_lower']} ── {d['bb_upper']}\n"
+                f"  ATR        : {d['atr']}  |  Vol Ratio: {d['vol_ratio']}x\n"
+                f"  {'─'*40}\n"
+                f"  Score: {d['score']:+.2f}  →  *** {d['signal']} ***"
             )
         except Exception as e:
             return f"Error: {e}"
 
-    def cmd_ai(self, args: list[str]) -> str:
+    def cmd_ai(self, args):
         symbol    = args[0].upper() if args else "BTC/USDT"
         timeframe = args[1] if len(args) > 1 else "1h"
         try:
-            data     = self.market.full_analysis(symbol, timeframe)
-            analysis = self.ai.analyze(data)
-            self._log("ai_analysis", analysis)
-            return f"\n{analysis}"
+            data = self.market.full_analysis(symbol, timeframe)
+            return f"\n{self.ai.analyze(data)}"
         except Exception as e:
             return f"Error: {e}"
 
-    def cmd_ask(self, args: list[str]) -> str:
+    def cmd_ask(self, args):
         if not args:
             return "Usage: ask <question>"
-        question = " ".join(args)
-        try:
-            return f"\n{self.ai.ask(question)}"
-        except Exception as e:
-            return f"Error: {e}"
+        return f"\n{self.ai.ask(' '.join(args))}"
 
-    def cmd_buy(self, args: list[str]) -> str:
+    def cmd_multi(self, args):
+        symbols = [s.upper() for s in args] if args else ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+        results, lock = [], threading.Lock()
+
+        def fetch(sym):
+            try:
+                d = self.market.full_analysis(sym)
+                with lock:
+                    results.append(
+                        f"  {sym:12} | {d['price']:>12.4f} | RSI {d['rsi']:5.1f} | Vol {d['vol_ratio']:.1f}x | {d['signal']}"
+                    )
+            except Exception as e:
+                with lock:
+                    results.append(f"  {sym:12} | ERROR: {e}")
+
+        threads = [threading.Thread(target=fetch, args=(s,)) for s in symbols]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        return "\nMulti-Scan:\n" + "\n".join(sorted(results))
+
+    def cmd_buy(self, args):
         if len(args) < 2:
-            return "Usage: buy <SYMBOL> <USDT amount>"
-        symbol, amount = args[0].upper(), float(args[1])
+            return "Usage: buy <SYMBOL> <USDT>"
         try:
-            price = self.market.ticker(symbol)["last"]
-            return self.paper.trade(symbol, "BUY", amount, price)
+            price = self.market.ticker(args[0].upper())["last"]
+            return self.paper.trade(args[0].upper(), "BUY", float(args[1]), price)
         except Exception as e:
             return f"Error: {e}"
 
-    def cmd_sell(self, args: list[str]) -> str:
+    def cmd_sell(self, args):
         if len(args) < 2:
-            return "Usage: sell <SYMBOL> <USDT amount>"
-        symbol, amount = args[0].upper(), float(args[1])
+            return "Usage: sell <SYMBOL> <USDT>"
         try:
-            price = self.market.ticker(symbol)["last"]
-            return self.paper.trade(symbol, "SELL", amount, price)
+            price = self.market.ticker(args[0].upper())["last"]
+            return self.paper.trade(args[0].upper(), "SELL", float(args[1]), price)
         except Exception as e:
             return f"Error: {e}"
 
-    def cmd_balance(self, _) -> str:
+    def cmd_balance(self, _):
         return f"Paper Balance: {self.paper.balance():.4f} USDT"
 
-    def cmd_trades(self, args: list[str]) -> str:
+    def cmd_trades(self, args):
         limit = int(args[0]) if args else 10
         return f"Last {limit} trades:\n{self.paper.history(limit)}"
 
-    def cmd_watch(self, args: list[str]) -> str:
+    def cmd_watch(self, args):
         if not args:
-            return "Usage: watch <SYMBOL> [pct_threshold]"
-        symbol    = args[0].upper()
-        threshold = float(args[1]) if len(args) > 1 else 3.0
-        self.monitor.watch(symbol, threshold)
-        return f"Monitoring {symbol} (alert at ±{threshold}% move)."
+            return "Usage: watch <SYMBOL> [pct]"
+        self.monitor.watch(args[0].upper(), float(args[1]) if len(args) > 1 else 3.0)
+        return f"Monitoring {args[0].upper()}."
 
-    def cmd_unwatch(self, args: list[str]) -> str:
+    def cmd_unwatch(self, args):
         if not args:
             return "Usage: unwatch <SYMBOL>"
         self.monitor.unwatch(args[0].upper())
         return f"Stopped watching {args[0].upper()}."
 
-    def cmd_evolve(self, args: list[str]) -> str:
+    # ── Evolution / Skill Commands ────────────────────────────────────────────
+
+    def cmd_evolve(self, args):
         if not args:
             return "Usage: evolve <task description>"
         task = " ".join(args)
-        print(f"[EVOLUTION] Generating skill: {task}")
+        print(f"[EVOLUTION] Generating skill for: {task}")
         try:
-            code       = self.ai.generate_skill(task)
-            skill_name = f"skill_{int(time.time())}"
-            path       = os.path.join("skills", f"{skill_name}.py")
-            os.makedirs("skills", exist_ok=True)
-            with open(path, "w") as f:
-                f.write(code)
-            spec   = importlib.util.spec_from_file_location(skill_name, path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            self._skills[skill_name] = module.Skill()
-            conn = sqlite3.connect(self.db_path)
-            conn.execute(
-                "INSERT INTO skills (name, path, ts) VALUES (?, ?, datetime('now'))",
-                (skill_name, path),
-            )
-            conn.commit()
-            conn.close()
-            return f"Skill '{skill_name}' integrated and ready."
+            name, desc = self.skills.create(self.ai.model, task)
+            return f"Skill created: {name}\nDescription : {desc}"
         except Exception as e:
             return f"Evolution failed: {e}"
 
-    def cmd_skills(self, _) -> str:
-        if not self._skills:
-            return "No skills loaded yet. Use 'evolve <task>'."
-        return "Loaded skills:\n" + "\n".join(f"  • {k}" for k in self._skills)
+    def cmd_upgrade(self, args):
+        if not args:
+            return "Usage: upgrade <skill_name|all> [feedback]"
+        target   = args[0]
+        feedback = " ".join(args[1:]) if len(args) > 1 else ""
+        if target == "all":
+            results = self.skills.upgrade_all(self.ai.model)
+            return "Self-Upgrade Results:\n" + "\n".join(results)
+        try:
+            desc, ver = self.skills.upgrade(self.ai.model, target, feedback)
+            return f"Upgraded '{target}' to v{ver}\nDescription: {desc}"
+        except Exception as e:
+            return f"Upgrade failed: {e}"
 
-    def cmd_run(self, args: list[str]) -> str:
+    def cmd_skills(self, _):
+        return f"Skills Registry:\n{self.skills.list_all()}"
+
+    def cmd_skill_info(self, args):
+        if not args:
+            return "Usage: skill <skill_name>"
+        return self.skills.info(args[0])
+
+    def cmd_versions(self, args):
+        if not args:
+            return "Usage: versions <skill_name>"
+        return self.skills.version_history(args[0])
+
+    def cmd_run(self, args):
         if not args:
             return "Usage: run <skill_name> [key=value ...]"
-        name = args[0]
-        if name not in self._skills:
-            return f"Skill '{name}' not found. Use 'skills' to list."
+        name   = args[0]
         kwargs = {}
         for token in args[1:]:
             if "=" in token:
                 k, v = token.split("=", 1)
                 kwargs[k] = v
         try:
-            return str(self._skills[name].execute(**kwargs))
+            return self.skills.execute(name, **kwargs)
         except Exception as e:
-            return f"Skill error: {e}"
+            return f"Error: {e}"
 
-    def cmd_intel(self, args: list[str]) -> str:
+    # ── Knowledge Commands ────────────────────────────────────────────────────
+
+    def cmd_learn(self, args):
+        if not args:
+            return "Usage: learn <insight>"
+        insight = " ".join(args)
+        self.knowledge.store("manual", insight, tags="manual")
+        return f"Stored in knowledge base ({self.knowledge.count()} total entries)."
+
+    def cmd_recall(self, args):
+        if not args:
+            return "Usage: recall <topic>"
+        topic   = " ".join(args)
+        entries = self.knowledge.recall(topic, limit=8)
+        if not entries:
+            return f"No knowledge found for '{topic}'."
+        lines = [f"  {i+1}. {e}" for i, e in enumerate(entries)]
+        return f"Knowledge on '{topic}':\n" + "\n".join(lines)
+
+    def cmd_summarize(self, args):
+        topic = " ".join(args) if args else "BTC"
+        return f"\n{self.knowledge.summarize(self.ai.model, topic)}"
+
+    # ── Learning Loop Commands ────────────────────────────────────────────────
+
+    def cmd_autolearn(self, args):
+        verb = args[0].lower() if args else "status"
+        if verb == "on":
+            return self.learner.start()
+        if verb == "off":
+            return self.learner.stop()
+        if verb == "now":
+            return self.learner.run_once()
+        return self.learner.status
+
+    # ── Intel ─────────────────────────────────────────────────────────────────
+
+    def cmd_intel(self, args):
         limit = int(args[0]) if args else 5
-        conn  = sqlite3.connect(self.db_path)
+        conn  = _db()
         rows  = conn.execute(
             "SELECT topic, data, ts FROM intel ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         conn.close()
         if not rows:
             return "No intel logged yet."
-        lines = [f"  [{r[2]}] {r[0]}: {r[1][:80]}..." for r in rows]
-        return "\n".join(lines)
+        return "\n".join(f"  [{r['ts']}] {r['topic']}: {r['data'][:90]}..." for r in rows)
 
-    def cmd_multi(self, args: list[str]) -> str:
-        symbols   = args if args else ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-        results   = []
-        lock      = threading.Lock()
-
-        def fetch(sym):
-            try:
-                data = self.market.full_analysis(sym)
-                with lock:
-                    results.append(f"  {sym:12} | {data['price']:>12.4f} | RSI {data['rsi']:5.1f} | {data['signal']}")
-            except Exception as e:
-                with lock:
-                    results.append(f"  {sym:12} | ERROR: {e}")
-
-        threads = [threading.Thread(target=fetch, args=(s.upper(),)) for s in symbols]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        return "\nMulti-Scan Results:\n" + "\n".join(sorted(results))
-
-    # ── Dispatcher ───────────────────────────────────────────────────────────
+    # ── Dispatcher ────────────────────────────────────────────────────────────
 
     HELP = """
-Commands:
-  scan   [SYMBOL] [tf]      — technical analysis (default BTC/USDT 1h)
-  ai     [SYMBOL] [tf]      — deep AI analysis via Gemini
-  ask    <question>         — free-form AI question
-  multi  [S1 S2 S3...]      — scan multiple symbols in parallel
-  buy    <SYMBOL> <USDT>    — paper buy
-  sell   <SYMBOL> <USDT>    — paper sell
-  balance                   — show paper account balance
-  trades [n]                — last n paper trades
-  watch  <SYMBOL> [pct]     — alert on % price move (background)
-  unwatch <SYMBOL>          — stop monitoring
-  evolve <task>             — generate & load a new AI skill
-  skills                    — list loaded skills
-  run    <skill> [k=v ...]  — execute a loaded skill
-  intel  [n]                — show last n logged intel entries
-  help                      — this message
-  exit                      — quit
+━━ MARKET ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  scan    [SYMBOL] [tf]       technical analysis snapshot
+  ai      [SYMBOL] [tf]       deep Gemini AI analysis
+  ask     <question>          free-form AI question
+  multi   [S1 S2 ...]         parallel multi-symbol scan
+
+━━ TRADING (PAPER) ──────────────────────────────────────
+  buy     <SYMBOL> <USDT>     paper buy
+  sell    <SYMBOL> <USDT>     paper sell
+  balance                     paper account balance
+  trades  [n]                 last n paper trades
+
+━━ MONITORING ───────────────────────────────────────────
+  watch   <SYMBOL> [pct]      alert on ±pct% price move
+  unwatch <SYMBOL>            stop monitoring
+
+━━ SELF-EVOLUTION ───────────────────────────────────────
+  evolve  <task>              generate & load new skill
+  upgrade <name|all> [why]    improve skill(s) via AI
+  skills                      list all skills with stats
+  skill   <name>              skill detail & performance
+  versions <name>             skill version history
+  run     <name> [k=v ...]    execute a skill
+
+━━ KNOWLEDGE & LEARNING ─────────────────────────────────
+  learn   <insight>           manually store knowledge
+  recall  <topic>             recall past observations
+  summarize [topic]           AI summary of knowledge
+  autolearn on|off|now|status toggle background learning
+
+━━ SYSTEM ───────────────────────────────────────────────
+  intel   [n]                 last n logged intel entries
+  help                        this message
+  exit                        quit
 """
 
-    def handle_boss(self, uid: str, raw_cmd: str) -> str:
+    def handle_boss(self, uid: str, raw: str) -> str:
         if uid != BOSS_ID:
             return "UNAUTHORIZED"
-
-        parts = raw_cmd.strip().split()
+        parts = raw.strip().split()
         if not parts:
             return ""
         verb, args = parts[0].lower(), parts[1:]
-
         dispatch = {
-            "scan":    self.cmd_scan,
-            "ai":      self.cmd_ai,
-            "ask":     self.cmd_ask,
-            "multi":   self.cmd_multi,
-            "buy":     self.cmd_buy,
-            "sell":    self.cmd_sell,
-            "balance": self.cmd_balance,
-            "trades":  self.cmd_trades,
-            "watch":   self.cmd_watch,
-            "unwatch": self.cmd_unwatch,
-            "evolve":  self.cmd_evolve,
-            "skills":  self.cmd_skills,
-            "run":     self.cmd_run,
-            "intel":   self.cmd_intel,
-            "help":    lambda _: self.HELP,
-            "?":       lambda _: self.HELP,
+            "scan":      self.cmd_scan,
+            "ai":        self.cmd_ai,
+            "ask":       self.cmd_ask,
+            "multi":     self.cmd_multi,
+            "buy":       self.cmd_buy,
+            "sell":      self.cmd_sell,
+            "balance":   self.cmd_balance,
+            "trades":    self.cmd_trades,
+            "watch":     self.cmd_watch,
+            "unwatch":   self.cmd_unwatch,
+            "evolve":    self.cmd_evolve,
+            "upgrade":   self.cmd_upgrade,
+            "skills":    self.cmd_skills,
+            "skill":     self.cmd_skill_info,
+            "versions":  self.cmd_versions,
+            "run":       self.cmd_run,
+            "learn":     self.cmd_learn,
+            "recall":    self.cmd_recall,
+            "summarize": self.cmd_summarize,
+            "autolearn": self.cmd_autolearn,
+            "intel":     self.cmd_intel,
+            "help":      lambda _: self.HELP,
+            "?":         lambda _: self.HELP,
         }
-
         handler = dispatch.get(verb)
         if handler:
             return handler(args)
@@ -559,8 +1042,7 @@ if __name__ == "__main__":
             if cmd.lower() == "exit":
                 print("Shutting down. Goodbye.")
                 break
-            result = maya.handle_boss(uid, cmd)
-            print(f"\nMAYA: {result}\n")
+            print(f"\nMAYA: {maya.handle_boss(uid, cmd)}\n")
         except (KeyboardInterrupt, EOFError):
             print("\nShutting down.")
             break
