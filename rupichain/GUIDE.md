@@ -1,53 +1,54 @@
-# রুপি চেইন (Rupi Chain) — সম্পূর্ণ গাইড
+# Rupi Chain — Complete Guide
 
-> **ভাষা:** বাংলা | **Version:** 2.0.0 | **Node.js:** ≥ 18
+> **Version:** 2.0.0 | **Node.js:** ≥ 18
 
 ---
 
-## ১. কী এই Rupi Chain?
+## 1. What is Rupi Chain?
 
-Rupi Chain হলো একটি **Proof-of-Work** ভিত্তিক ক্রিপ্টোকারেন্সি ব্লকচেইন, যা Bitcoin-এর নকশায় অনুপ্রাণিত।  
-এটি সম্পূর্ণ **Node.js** তে লেখা এবং শেখার উদ্দেশ্যে তৈরি।
+Rupi Chain is a **Proof-of-Work** cryptocurrency blockchain inspired by Bitcoin's design.
+It is written entirely in **Node.js** and built as a learning and experimentation platform.
 
-### মূল বৈশিষ্ট্যসমূহ:
-| বৈশিষ্ট্য | বিবরণ |
+### Key Features
+
+| Feature | Details |
 |---|---|
-| **মুদ্রার নাম** | RUPI (₹) |
-| **মোট সরবরাহ** | ২১,০০,০০০ RUPI |
-| **প্রথম পুরস্কার** | ৫০ RUPI প্রতি ব্লক |
-| **হালভিং** | প্রতি ২,১০,০০০ ব্লকে পুরস্কার অর্ধেক |
-| **ব্লক সময়** | ~১০ সেকেন্ড (লক্ষ্য) |
-| **ক্রিপ্টোগ্রাফি** | ECDSA secp256k1 (Bitcoin-এর মতো) |
-| **নেটওয়ার্ক** | WebSocket P2P |
+| **Currency** | RUPI (₹) |
+| **Max Supply** | 21,00,000 RUPI |
+| **Initial Reward** | 50 RUPI per block |
+| **Halving** | Reward halves every 2,10,000 blocks |
+| **Block Time** | ~10 seconds (target) |
+| **Cryptography** | ECDSA secp256k1 (same as Bitcoin) |
+| **Network** | WebSocket P2P |
 
 ---
 
-## ২. ইনস্টলেশন
+## 2. Installation
 
-### পূর্বশর্ত
-- **Node.js** ১৮ বা তার বেশি
-- **npm** (Node.js এর সাথে আসে)
+### Prerequisites
+- **Node.js** 18 or higher
+- **npm** (comes with Node.js)
 
-### Windows-এ ইনস্টলেশন
+### Windows
 
 ```powershell
-# Node.js ডাউনলোড করুন: https://nodejs.org
-# তারপর PowerShell বা CMD-এ:
+# Download Node.js from: https://nodejs.org
+# Then in PowerShell or CMD:
 
 git clone <repository-url> rupichain
 cd rupichain
 npm install
-node test.js        # পরীক্ষা চালান (কোনো npm install ছাড়াই কাজ করবে)
+node test.js        # run tests (works without npm install)
 ```
 
-### Linux/Mac-এ ইনস্টলেশন
+### Linux / Mac
 
 ```bash
-# Node.js ইনস্টল করুন (Ubuntu/Debian)
+# Install Node.js (Ubuntu/Debian)
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
-# প্রকল্প ক্লোন করুন
+# Clone the project
 git clone <repository-url> rupichain
 cd rupichain
 npm install
@@ -56,27 +57,27 @@ node test.js
 
 ---
 
-## ৩. কীভাবে চালাবেন
+## 3. Running the Node
 
-### প্রথমে পরীক্ষা করুন (npm ছাড়া)
+### Quick Test (no npm install needed)
 
 ```bash
 node test.js
 ```
 
-এটি শুধুমাত্র Node.js built-in মডিউল ব্যবহার করে এবং সব মূল লজিক পরীক্ষা করে।
+Uses only Node.js built-in modules and verifies all core logic.
 
-### পূর্ণ নোড চালু করুন
+### Start the Full Node
 
 ```bash
-# ডিপেন্ডেন্সি ইনস্টল করুন
+# Install dependencies
 npm install
 
-# নোড চালু করুন
+# Start the node
 node index.js
 ```
 
-সফলভাবে চালু হলে দেখতে পাবেন:
+On success you will see:
 ```
 ╔══════════════════════════════════════════╗
 ║        Rupi Chain Node v2.0              ║
@@ -86,85 +87,84 @@ node index.js
 ╚══════════════════════════════════════════╝
 ```
 
-### কাস্টম পোর্টে চালান
+### Custom Ports
 
 ```bash
 API_PORT=8080 P2P_PORT=7001 node index.js
 ```
 
-### ওয়েব ড্যাশবোর্ড
+### Web Dashboard
 
-ব্রাউজারে খুলুন: **http://localhost:3001**
+Open in browser: **http://localhost:3001**
 
 ---
 
-## ৪. Mining শুরু করবেন কীভাবে
+## 4. Mining
 
-### CLI মাইনার
+### CLI Miner
 
 ```bash
-node mine.js RC1A2B3C4D5E6F...   # আপনার ওয়ালেট অ্যাড্রেস দিন
+node mine.js RC1A2B3C4D5E6F...   # provide your wallet address
 ```
 
-### এনভায়রনমেন্ট ভেরিয়েবল দিয়ে
+### Via Environment Variable
 
 ```bash
 MINE=true MINER_ADDRESS=RC1A2B3C... node index.js
 ```
 
-### মাল্টি-কোর মাইনিং (স্বয়ংক্রিয়)
+### Multi-Core Mining (automatic)
 
-Rupi Chain স্বয়ংক্রিয়ভাবে আপনার সব CPU কোর ব্যবহার করে:
+Rupi Chain automatically uses all available CPU cores:
 
 ```javascript
-// src/miner.js ব্যবহার করে
 const { CPUMiner } = require('./src/miner');
 const miner = new CPUMiner(blockchain);
 
-// os.cpus().length কোর স্বয়ংক্রিয়ভাবে ব্যবহার হয়
+// Uses os.cpus().length cores automatically
 await miner.mineBlock('RC_YOUR_ADDRESS');
 ```
 
-### GPU মাইনিং
+### GPU Mining
 
-GPU মাইনিং এখনো পরীক্ষামূলক। যদি hashcat ইনস্টল থাকে:
+GPU mining is experimental. If hashcat is installed:
 
 ```bash
-# hashcat-এর মাধ্যমে (ভবিষ্যৎ সংস্করণে পূর্ণ সমর্থন)
-which hashcat   # পরীক্ষা করুন
-node mine.js RC_ADDRESS  # স্বয়ংক্রিয়ভাবে GPU খোঁজার চেষ্টা করবে
+# Check for hashcat
+which hashcat
+node mine.js RC_ADDRESS  # will attempt to detect GPU automatically
 ```
 
-GPU না পাওয়া গেলে স্বয়ংক্রিয়ভাবে CPU mining-এ ফিরে যাবে।
+Falls back to CPU mining if no GPU is found.
 
 ---
 
-## ৫. Wallet তৈরি
+## 5. Creating a Wallet
 
 ```javascript
-// wallet-create.js (নতুন ফাইল তৈরি করুন)
+// wallet-create.js (create this file)
 const { generateWallet } = require('./src/wallet');
 
 const wallet = generateWallet();
-console.log('আপনার নতুন ওয়ালেট:');
+console.log('Your new wallet:');
 console.log('Address:    ', wallet.address);
 console.log('Public Key: ', wallet.publicKey);
 console.log('Private Key:', wallet.privateKey);
-console.log('\n⚠️  Private Key সবসময় গোপন রাখুন!');
+console.log('\n⚠️  Never share your Private Key!');
 ```
 
 ```bash
 node wallet-create.js
 ```
 
-**উদাহরণ আউটপুট:**
+**Example output:**
 ```
 Address:     RC1A2B3C4D5E6F7890ABCDEF1234567890AB
 Public Key:  04abcdef...
-Private Key: 8f7a3b...  ← এটি কখনো শেয়ার করবেন না!
+Private Key: 8f7a3b...  ← never share this!
 ```
 
-### বিদ্যমান Private Key থেকে ওয়ালেট পুনরুদ্ধার
+### Restore Wallet from Private Key
 
 ```javascript
 const { walletFromPrivateKey } = require('./src/wallet');
@@ -174,33 +174,29 @@ console.log('Address:', wallet.address);
 
 ---
 
-## ৬. Transaction পাঠানো
+## 6. Sending Transactions
 
-### JavaScript কোডের মাধ্যমে
+### Via JavaScript
 
 ```javascript
-const { Wallet } = require('./src/wallet');
+const { Wallet }      = require('./src/wallet');
 const { Transaction } = require('./src/transaction');
 
-// ওয়ালেট লোড করুন
 const alice = new Wallet('alice-private-key-hex');
 const bob   = new Wallet('bob-private-key-hex');
 
-// ট্রানজেকশন তৈরি করুন
 const tx = new Transaction({
   sender:    alice.address,
   recipient: bob.address,
-  amount:    10,      // ১০ RUPI
-  fee:       0.01,    // মাইনার ফি
+  amount:    10,      // 10 RUPI
+  fee:       0.01,    // miner fee
 });
 
-// সই করুন
 alice.signTransaction(tx);
-
-// নেটওয়ার্কে পাঠান (HTTP API)
+// submit via HTTP API
 ```
 
-### REST API-এর মাধ্যমে
+### Via REST API
 
 ```bash
 curl -X POST http://localhost:3001/transaction \
@@ -218,84 +214,83 @@ curl -X POST http://localhost:3001/transaction \
 
 ---
 
-## ৭. P2P নেটওয়ার্কে যুক্ত হওয়া
+## 7. Joining the P2P Network
 
-### পিয়ার যোগ করুন
+### Add a Peer
 
 ```bash
-# চলমান নোডে পিয়ার যোগ করুন
 curl -X POST http://localhost:3001/peers \
   -H "Content-Type: application/json" \
   -d '{"url": "ws://192.168.1.100:6001"}'
 ```
 
-### পরিবেশ ভেরিয়েবল দিয়ে বুটস্ট্র্যাপ পিয়ার
+### Bootstrap Peers via Environment Variable
 
 ```bash
 PEERS=ws://node1.rupichain.io:6001,ws://node2.rupichain.io:6001 node index.js
 ```
 
-### লোকাল টেস্টনেট (দুটি নোড)
+### Local Testnet (two nodes)
 
 ```bash
-# টার্মিনাল ১
+# Terminal 1
 API_PORT=3001 P2P_PORT=6001 node index.js
 
-# টার্মিনাল ২  
+# Terminal 2
 API_PORT=3002 P2P_PORT=6002 PEERS=ws://localhost:6001 node index.js
 ```
 
 ---
 
-## ৮. REST API রেফারেন্স
+## 8. REST API Reference
 
-| Method | Endpoint | বিবরণ |
-|--------|----------|-------|
-| GET | `/` | ওয়েব ড্যাশবোর্ড |
-| GET | `/info` | চেইন তথ্য (উচ্চতা, কঠিনতা, সরবরাহ) |
-| GET | `/chain` | সম্পূর্ণ ব্লকচেইন |
-| GET | `/blocks/:index` | নির্দিষ্ট ব্লক |
-| GET | `/balance/:address` | ওয়ালেট ব্যালেন্স |
-| POST | `/transaction` | ট্রানজেকশন জমা দিন |
-| GET | `/pending` | মেমপুল (অপেক্ষমাণ ট্রানজেকশন) |
-| GET | `/mine/:address` | একটি ব্লক মাইন করুন (ডেমো) |
-| GET | `/peers` | সংযুক্ত পিয়ার তালিকা |
-| POST | `/peers` | নতুন পিয়ার যোগ করুন |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | Web dashboard |
+| GET | `/info` | Chain info (height, difficulty, supply) |
+| GET | `/chain` | Full blockchain |
+| GET | `/blocks/:index` | Block by index |
+| GET | `/balance/:address` | Wallet balance |
+| POST | `/transaction` | Submit a transaction |
+| GET | `/pending` | Mempool (pending transactions) |
+| GET | `/mine/:address` | Mine one block (demo) |
+| GET | `/peers` | Connected peers list |
+| POST | `/peers` | Add a new peer |
 
 ---
 
-## ৯. প্রযুক্তিগত আর্কিটেকচার
+## 9. Technical Architecture
 
 ```
 rupichain/
-├── index.js              ← মূল এন্ট্রি পয়েন্ট
-├── mine.js               ← CLI মাইনার
-├── test.js               ← স্বনির্ভর পরীক্ষা (কোনো npm ছাড়া)
+├── index.js              ← main entry point
+├── mine.js               ← CLI miner
+├── test.js               ← zero-dependency tests (26 pass)
 ├── package.json
 └── src/
-    ├── blockchain.js     ← ব্লক, চেইন, মেমপুল লজিক
-    ├── transaction.js    ← secp256k1 ট্রানজেকশন
-    ├── wallet.js         ← কী পেয়ার, অ্যাড্রেস জেনারেশন
-    ├── miner.js          ← মাল্টি-কোর CPU মাইনার
-    ├── miner-worker.js   ← Worker Thread (হ্যাশ কম্পিউটেশন)
-    ├── p2p.js            ← WebSocket P2P নেটওয়ার্ক
-    └── api.js            ← Express REST API + ড্যাশবোর্ড
+    ├── blockchain.js     ← Block, Chain, Mempool logic
+    ├── transaction.js    ← secp256k1 transactions
+    ├── wallet.js         ← key pair, address generation
+    ├── miner.js          ← multi-core CPU miner
+    ├── miner-worker.js   ← Worker Thread (hash computation)
+    ├── p2p.js            ← WebSocket P2P network
+    └── api.js            ← Express REST API + dashboard
 ```
 
-### ডেটা ফ্লো
+### Data Flow
 
 ```
-নতুন ব্লক খোঁজা:
-Miner → [Worker Thread x N কোর] → প্রথম জয়ী → Blockchain.addBlock() → P2P broadcast
+New block:
+Miner → [Worker Thread × N cores] → first winner → Blockchain.addBlock() → P2P broadcast
 
-নতুন ট্রানজেকশন:
-User → POST /transaction → Mempool → পরবর্তী ব্লকে অন্তর্ভুক্ত
+New transaction:
+User → POST /transaction → Mempool → included in next block
 
-P2P সিঙ্ক:
-নতুন পিয়ার সংযোগ → QUERY_LATEST → চেইন তুলনা → দীর্ঘতম বৈধ চেইন গ্রহণ
+P2P sync:
+New peer connects → QUERY_LATEST → compare chains → accept longest valid chain
 ```
 
-### ব্লক স্ট্রাকচার
+### Block Structure
 
 ```json
 {
@@ -312,83 +307,83 @@ P2P সিঙ্ক:
 
 ### Difficulty Adjustment
 
-- প্রতি ১০ ব্লকে কঠিনতা পর্যালোচনা হয়
-- লক্ষ্য: প্রতি ১০ সেকেন্ডে একটি ব্লক
-- যদি ব্লক খুব দ্রুত হয় → কঠিনতা বাড়ে
-- যদি ব্লক খুব ধীর হয় → কঠিনতা কমে
+- Reviewed every 10 blocks
+- Target: one block every 10 seconds
+- Blocks too fast → difficulty increases
+- Blocks too slow → difficulty decreases
 
 ---
 
-## ১০. Roadmap
+## 10. Roadmap
 
-### সংস্করণ 2.x (বর্তমান)
-- [x] Proof-of-Work মাইনিং
-- [x] মাল্টি-কোর CPU মাইনার
-- [x] ECDSA secp256k1 সিগনেচার
-- [x] P2P WebSocket নেটওয়ার্ক
-- [x] REST API + ড্যাশবোর্ড
-- [x] হালভিং মেকানিজম
-- [x] মেমপুল
+### v2.x (current)
+- [x] Proof-of-Work mining
+- [x] Multi-core CPU miner
+- [x] ECDSA secp256k1 signatures
+- [x] P2P WebSocket network
+- [x] REST API + dashboard
+- [x] Halving mechanism
+- [x] Mempool
 
-### সংস্করণ 3.x (পরিকল্পিত)
-- [ ] UTXO মডেল (Bitcoin-এর মতো)
+### v3.x (planned)
+- [ ] UTXO model (like Bitcoin)
 - [ ] LevelDB persistent storage
 - [ ] SPV (Simplified Payment Verification)
-- [ ] পূর্ণ GPU মাইনিং সমর্থন
-- [ ] Script ভাষা (simple smart contracts)
+- [ ] Full GPU mining support
+- [ ] Simple scripting language (smart contracts)
 - [ ] Bloom filters
-- [ ] Testnet/Mainnet বিভাজন
+- [ ] Testnet / Mainnet split
 
 ---
 
-## ১১. সততার সাথে: মূল্য কীভাবে আসে?
+## 11. Honest Note: How Does Value Come?
 
-এটি একটি গুরুত্বপূর্ণ প্রশ্ন।
+This is an important question.
 
-### বাস্তবতা
+### Reality
 
-Rupi Chain একটি **শিক্ষামূলক প্রকল্প**। Bitcoin বা Ethereum-এর মতো "মূল্য" পেতে হলে এগুলো লাগবে:
+Rupi Chain is an **educational project**. To achieve real value like Bitcoin or Ethereum, you need:
 
-1. **নেটওয়ার্ক ইফেক্ট:** হাজার হাজার লোক এটি ব্যবহার করতে হবে।
-2. **এক্সচেঞ্জ লিস্টিং:** কোনো ক্রিপ্টো এক্সচেঞ্জে ট্রেড হতে হবে।
-3. **প্রকৃত ব্যবহার:** কোনো পণ্য বা সেবার জন্য গ্রহণযোগ্যতা।
-4. **বিশ্বাস:** ব্যবহারকারীদের দীর্ঘমেয়াদী আস্থা।
+1. **Network effect** — thousands of people must actually use it.
+2. **Exchange listing** — it must be tradeable on a crypto exchange.
+3. **Real utility** — acceptance for goods or services.
+4. **Trust** — long-term confidence from users over years.
 
-### ক্রিপ্টোকারেন্সির মূল্য কোথা থেকে আসে?
+### Where does cryptocurrency value come from?
 
 ```
-মূল্য = নেটওয়ার্ক ব্যবহার × বিশ্বাস × ঘাটতি
+Value = Network Usage × Trust × Scarcity
 ```
 
-- **Bitcoin** মূল্যবান কারণ ১৫+ বছর ধরে নিরাপদ এবং কোটি কোটি মানুষ ব্যবহার করে।
-- **নতুন কয়েন** শুধু কোড লিখলেই মূল্যবান হয় না।
+- **Bitcoin** has value because it has been secure for 15+ years and is used by hundreds of millions of people.
+- **New coins** do not become valuable just by writing code.
 
-### ব্যবহারিক পরামর্শ
+### Practical Advice
 
-✅ **ব্যবহার করুন:**  
-- ব্লকচেইন শেখার জন্য
-- প্রাইভেট নেটওয়ার্ক পরীক্ষার জন্য
-- DApp ডেভেলপমেন্ট শেখার জন্য
+✅ **Good uses:**
+- Learning blockchain technology
+- Testing private networks
+- Practicing DApp development
 
-❌ **করবেন না:**  
-- বাস্তব অর্থ বিনিয়োগ করবেন না
-- অন্যদের "লাভজনক মাইনিং" বলে প্রতারণা করবেন না
-- এটিকে বাস্তব মুদ্রা হিসেবে উপস্থাপন করবেন না
+❌ **Do not:**
+- Invest real money into it
+- Mislead others by claiming "profitable mining"
+- Present it as a real currency
 
-> **মনে রাখুন:** যেকোনো নতুন ক্রিপ্টো প্রজেক্টে বিনিয়োগ করার আগে সম্পূর্ণ গবেষণা করুন।
+> **Remember:** Always do thorough research before investing in any new crypto project.
 
 ---
 
-## ১২. ডেভেলপমেন্ট
+## 12. Development
 
-### পরীক্ষা চালান
+### Run Tests
 
 ```bash
-node test.js          # কোর লজিক পরীক্ষা (npm ছাড়া)
-npm test              # একই, npm script হিসেবে
+node test.js    # core logic tests (no npm required)
+npm test        # same, via npm script
 ```
 
-### লগগুলো বোঝা
+### Reading the Logs
 
 ```
 [API] REST server running at http://localhost:3001
@@ -398,26 +393,26 @@ npm test              # একই, npm script হিসেবে
 [Node] Block #1 added to chain. Height: 1
 ```
 
-### কমন সমস্যা
+### Common Issues
 
-| সমস্যা | সমাধান |
-|--------|--------|
-| `Cannot find module 'ws'` | `npm install` চালান |
-| `Cannot find module 'elliptic'` | `npm install` চালান |
+| Problem | Solution |
+|---------|----------|
+| `Cannot find module 'ws'` | Run `npm install` |
+| `Cannot find module 'elliptic'` | Run `npm install` |
 | Port already in use | `API_PORT=3002 node index.js` |
-| Mining too slow | `difficulty` কমান (test only) |
+| Mining too slow | Lower `difficulty` (test only) |
 
 ---
 
-## ১৩. লাইসেন্স এবং যোগাযোগ
+## 13. License
 
-এই প্রকল্পটি শিক্ষামূলক উদ্দেশ্যে তৈরি। MIT License এর অধীনে।
+This project is for educational purposes. Released under the MIT License.
 
 ```
 Rupi Chain v2.0.0
-Built with ❤️ for learning blockchain technology
+Built for learning blockchain technology
 ```
 
 ---
 
-*শেষ আপডেট: ২০২৬*
+*Last updated: 2026*
