@@ -148,6 +148,9 @@ class WebIntelligence:
     # ── Top Movers ────────────────────────────────────────────────────────────
     def top_movers(self, top_n: int = 5) -> dict:
         """Biggest gainers and losers (top-250 by market cap)."""
+        def _fmt_coin(c):
+            return f"{c['symbol'].upper()} {c['price_change_percentage_24h']:+.2f}%"
+
         try:
             r = _SESSION.get(
                 "https://api.coingecko.com/api/v3/coins/markets",
@@ -168,11 +171,9 @@ class WebIntelligence:
             )
             losers  = sorted_by_change[:top_n]
             gainers = sorted_by_change[-top_n:][::-1]
-            def fmt(c):
-                return f"{c['symbol'].upper()} {c['price_change_percentage_24h']:+.2f}%"
             return {
-                "gainers": [fmt(c) for c in gainers],
-                "losers":  [fmt(c) for c in losers],
+                "gainers": [_fmt_coin(c) for c in gainers],
+                "losers":  [_fmt_coin(c) for c in losers],
             }
         except Exception as e:
             return {"error": str(e)}
